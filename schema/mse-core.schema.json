@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mutation-safety-envelope.org/schema/v0.1.0/mse-core.schema.json",
+  "title": "Mutation Safety Envelope — Core Schema",
+  "description": "Normative, domain-blind schema for MSE v0.1.0. This schema defines the safety envelope only. Domain-specific vocabulary (SKUs, fares, plans, billing periods, etc.) MUST NOT be added here — it belongs in a profile that extends `Effect.type` namespaces and `value` payloads. See /spec/normative-spec.md.",
+  "$defs": {
+    "GuaranteeMode": {
+      "type": "string",
+      "enum": ["EXACT", "REVALIDATE", "UNKNOWN"],
+      "description": "Confidence classification for a predicted effect. EXACT: the value is guaranteed to hold at commit time if committed within validUntil. REVALIDATE: the value may drift and MUST be re-checked at or before commit. UNKNOWN: no guarantee is offered; the client MUST NOT rely on the value for acceptance-constraint evaluation."
+    },
+
+    "Guarantee": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "$ref": "#/$defs/GuaranteeMode" },
+        "validUntil": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp. Required when mode is EXACT or REVALIDATE if the guarantee is time-bounded. Absent validUntil with mode=EXACT means the guarantee does not expire before commit is attempted at all (implementations SHOULD still treat an unreasonably long-lived EXACT guarantee with suspicion; see security considerations)."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "UNKNOWN" } } },
+          "then": {
+            "properties": {
+              "validUntil": { "not": {} }
+            }
+          }
+        }
+      ]
+    },
+
+    "Effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value", "guarantee"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$",
+          "description": "Namespaced, domain-defined effect identifier in the form `<namespace>:<local_name>`, e.g. `retail:order_total_delta`. The MSE core assigns no meaning to any namespace or local_name; it only requires the shape. Profiles own the registry of meaningful values within their namespace."
+        },
+        "value": {
+          "description": "Domain-defined payload for this effect. The core treats this as opaque. Profiles SHOULD constrain `value` to a specific, documented shape per effect type (e.g. a signed decimal amount + ISO 4217 currency code for a *_delta effect), but the core schema intentionally does not."
+        },
+        "guarantee": { "$ref": "#/$defs/Guarantee" }
+      }
+    },
+
+    "MutationProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["proposalId", "target", "change"],
+      "properties": {
+        "proposalId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Client- or server-generated identifier for this proposal, unique within the issuing system. MUST NOT be reused across distinct proposals."
+        },
+        "target": {
+          "description": "Opaque, domain-defined reference to the existing commercial resource being mutated (e.g. an order id, itinerary id, subscription id). The core does not interpret this value."
+        },
+        "change": {
+          "description": "Opaque, domain-defined description of the proposed mutation. The core does not interpret this value; it is passed through to the provider that produces a MutationQuote."
+        }
+      }
+    },
+
+    "MutationQuote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quoteId", "target", "effects"],
+      "properties": {
+        "quoteId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Unique identifier for this quote. A commit request references this id."
+        },
+        "target": {
+          "description": "Opaque reference to the resource this quote applies to. SHOULD match the `target` of the originating MutationProposal."
+        },
+        "snapshot": {
+          "description": "Opaque, domain-defined reference or hash representing the state of `target` at quote time (e.g. a version, ETag, or content hash). Used by a provider to detect drift between quote and commit. Optional: not every provider can offer a snapshot reference."
+        },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Effect" },
+          "description": "Predicted consequences of committing this quote. MAY be empty (a no-op or purely structural change), but the array key MUST be present."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp after which this quote MUST NOT be committed. A commit attempted after expiresAt MUST be refused by a conformant provider. If absent, the quote does not expire independently of its effects' own guarantee.validUntil values (the commit consistency rules in the normative spec still apply)."
+        },
+        "commitConsistency": {
+          "type": "string",
+          "enum": ["SNAPSHOT_REQUIRED", "SNAPSHOT_ADVISORY", "NONE"],
+          "default": "NONE",
+          "description": "Declares how a provider will use `snapshot` at commit time. SNAPSHOT_REQUIRED: commit MUST be refused if the resource's current state does not match snapshot. SNAPSHOT_ADVISORY: provider MAY warn or re-quote on drift but is not required to refuse. NONE: no snapshot-based drift detection is offered."
+        }
+      }
+    },
+
+    "ComparisonOperator": {
+      "type": "string",
+      "enum": ["<=", ">=", "==", "!="]
+    },
+
+    "AcceptanceConstraint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["effectType", "operator", "value"],
+      "properties": {
+        "effectType": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$",
+          "description": "The Effect.type this constraint applies to."
+        },
+        "operator": { "$ref": "#/$defs/ComparisonOperator" },
+        "value": {
+          "description": "Primitive comparable bound (number, string, or boolean). The core does not support comparing structured/object values; a profile that needs to compare structured effect values (e.g. currency-qualified amounts) MUST define and document its own comparison semantics for that effectType, and note this is a deliberate core limitation, not an oversight."
+        }
+      }
+    },
+
+    "CommitRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quoteId", "acceptanceConstraints"],
+      "properties": {
+        "quoteId": { "type": "string", "minLength": 1 },
+        "idempotencyKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque key supplied by the caller to allow safe retry of a commit request whose outcome is INDETERMINATE. MSE does not define the retry protocol itself (see 'What MSE does not define'); this field only reserves a place for one to be carried."
+        },
+        "acceptanceConstraints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AcceptanceConstraint" },
+          "description": "Bounds the caller requires to hold, checked against the final pre-commit quote. MAY be empty, meaning the caller accepts the quote unconditionally."
+        }
+      }
+    },
+
+    "CommitOutcome": {
+      "type": "string",
+      "enum": ["APPLIED", "REFUSED", "INDETERMINATE"]
+    },
+
+    "RefusalReason": {
+      "type": "string",
+      "enum": [
+        "QUOTE_EXPIRED",
+        "SNAPSHOT_MISMATCH",
+        "CONSTRAINT_VIOLATED",
+        "GUARANTEE_UNKNOWN_AT_COMMIT",
+        "PROVIDER_REJECTED"
+      ],
+      "description": "Non-exhaustive, extensible in profiles via additional string values outside this enum is NOT permitted by this core schema version; profiles needing more reasons SHOULD map to PROVIDER_REJECTED and carry detail in an out-of-band/provider-specific field. This is flagged as an open ambiguity — see spec/normative-spec.md §Open Issues."
+      },
+
+    "CommitResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quoteId", "outcome"],
+      "properties": {
+        "quoteId": { "type": "string", "minLength": 1 },
+        "outcome": { "$ref": "#/$defs/CommitOutcome" },
+        "refusalReason": { "$ref": "#/$defs/RefusalReason" },
+        "committedEffects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Effect" },
+          "description": "Present when outcome=APPLIED. The effects as actually realized at commit time, which MAY differ from the quoted effects only for effects whose guarantee.mode was REVALIDATE or UNKNOWN. A conformant provider MUST NOT silently alter an EXACT-guaranteed effect between quote and commit; doing so is a conformance violation, not a valid APPLIED result (see spec)."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "outcome": { "const": "REFUSED" } },
+            "required": ["outcome"]
+          },
+          "then": {
+            "properties": { "refusalReason": { "$ref": "#/$defs/RefusalReason" } },
+            "required": ["refusalReason"]
+          }
+        }
+      ]
+    },
+
+    "EffectFinalityState": {
+      "type": "string",
+      "enum": ["FINAL", "PENDING", "FAILED", "UNKNOWN"]
+    },
+
+    "EffectReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["effectType", "finality"],
+      "properties": {
+        "effectType": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$"
+        },
+        "finality": { "$ref": "#/$defs/EffectFinalityState" },
+        "value": {
+          "description": "Domain-defined realized value for this effect, when known. MAY be absent when finality is PENDING or UNKNOWN."
+        },
+        "settledAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp at which finality became FINAL or FAILED. Absent while PENDING or UNKNOWN."
+        }
+      }
+    },
+
+    "Receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quoteId", "mutationOutcome", "effectReceipts"],
+      "properties": {
+        "quoteId": { "type": "string", "minLength": 1 },
+        "mutationOutcome": { "$ref": "#/$defs/CommitOutcome" },
+        "effectReceipts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/EffectReceipt" },
+          "description": "Finality state for each effect the caller needs tracked. MAY be a subset of the quote's effects if others are not independently trackable; this is a known ambiguity (see spec)."
+        }
+      }
+    }
+  },
+
+  "type": "object",
+  "description": "This top-level schema is a container for the $defs above. MSE does not mandate a single wire envelope; implementations reference individual $defs (MutationProposal, MutationQuote, CommitRequest, CommitResult, Receipt) as needed for their transport.",
+  "properties": {
+    "proposal": { "$ref": "#/$defs/MutationProposal" },
+    "quote": { "$ref": "#/$defs/MutationQuote" },
+    "commitRequest": { "$ref": "#/$defs/CommitRequest" },
+    "commitResult": { "$ref": "#/$defs/CommitResult" },
+    "receipt": { "$ref": "#/$defs/Receipt" }
+  },
+  "additionalProperties": false
+}

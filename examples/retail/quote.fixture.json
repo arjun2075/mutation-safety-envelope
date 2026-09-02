@@ -1,0 +1,21 @@
+{
+  "quote": {
+    "quoteId": "quote_retail_8842_1",
+    "target": { "orderId": "order_8842" },
+    "snapshot": { "orderVersion": 7 },
+    "commitConsistency": "SNAPSHOT_REQUIRED",
+    "expiresAt": "2026-09-02T18:00:00Z",
+    "effects": [
+      {
+        "type": "retail:order_total_delta",
+        "value": { "amount": "12.50", "currency": "USD" },
+        "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T18:00:00Z" }
+      },
+      {
+        "type": "retail:shipping_fee",
+        "value": { "amount": "12.50", "currency": "USD" },
+        "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T18:00:00Z" }
+      }
+    ]
+  }
+}

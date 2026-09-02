@@ -1,0 +1,26 @@
+{
+  "name": "mutation-safety-envelope",
+  "version": "0.1.0",
+  "description": "Experimental safety envelope for agent-initiated mutations to existing commercial state. Independent research proposal; not an official spec of any vendor or standards body.",
+  "license": "Apache-2.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "validate-schema": "ajv compile -s schema/mse-core.schema.json --spec=draft2020",
+    "lint:examples": "node --experimental-vm-modules ./node_modules/.bin/tsx test/schema-conformance.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "ajv": "^8.16.0",
+    "ajv-formats": "^3.0.1",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}

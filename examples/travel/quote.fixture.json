@@ -1,0 +1,26 @@
+{
+  "quote": {
+    "quoteId": "quote_travel_abc123_1",
+    "target": { "pnr": "ABC123", "segmentId": "seg_2" },
+    "snapshot": { "pnrVersion": "e_9f1a2" },
+    "commitConsistency": "SNAPSHOT_ADVISORY",
+    "expiresAt": "2026-09-02T15:20:00Z",
+    "effects": [
+      {
+        "type": "travel:fare_delta",
+        "value": { "amount": "84.00", "currency": "USD" },
+        "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T15:20:00Z" }
+      },
+      {
+        "type": "travel:seat_inventory",
+        "value": { "cabin": "economy", "seatsRequested": 1 },
+        "guarantee": { "mode": "REVALIDATE" }
+      },
+      {
+        "type": "travel:payment_deadline",
+        "value": { "deadline": "2026-09-05T00:00:00Z" },
+        "guarantee": { "mode": "EXACT" }
+      }
+    ]
+  }
+}
