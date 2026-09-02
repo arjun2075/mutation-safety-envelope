@@ -83,10 +83,21 @@ MutationProposal → MutationQuote → CommitRequest → CommitResult → Receip
 ### 3.1 MutationProposal → MutationQuote
 
 A provider receiving a `MutationProposal` MUST return a `MutationQuote`
-that does not itself mutate `target`. Producing a quote MUST be a
-non-mutating operation; a provider that mutates state merely by being asked
-to quote a mutation is not conformant, regardless of what it names the
-operation.
+that does not itself commit the requested commercial mutation described by
+`change`. Quoting MUST NOT be the mechanism by which the target resource's
+durable commercial terms (price, quantity, plan, itinerary, contract terms,
+etc.) actually change.
+
+This does not forbid a provider from creating a temporary, reversible
+reservation or hold as a side effect of quoting — for example, a short
+inventory or seat hold common in travel reshop. Such a hold is compatible
+with "quoting must not commit the mutation" **only if it is disclosed as an
+Effect in the quote itself** (e.g. `travel:inventory_hold`), so the caller
+can see it, and only if it is genuinely reversible/expiring on its own
+without requiring a commit. An undisclosed hold, or one the provider cannot
+or will not reverse if the quote is never committed, is not conformant —
+it is a mutation wearing a quote's name. (This resolves the ambiguity
+formerly tracked as open in `/docs/ambiguities.md` §4.)
 
 Each `Effect` in the quote MUST carry a `Guarantee`. A provider MUST NOT
 mark an effect `EXACT` unless it is actually prepared to honor that exact
@@ -106,8 +117,16 @@ rule:
   quote, the constraint is violated;
 - if the matching effect's `guarantee.mode` is `UNKNOWN`, the constraint is
   violated, because the value cannot be relied on;
+- if the matching effect's `value` is not shaped as a `ComparableValue` at
+  all, the constraint is violated (see §4a) — a constraint can only be
+  evaluated against a value the core knows how to compare;
+- if the matching effect's `value` and the constraint's `value` are
+  `ComparableValue`s of different `type` (variant), the constraint is
+  violated (see §4a);
+- if both are the `money` variant with different `currency`, the constraint
+  is violated (see §4a);
 - otherwise the constraint is violated iff `effect.value operator
-  constraint.value` is false.
+  constraint.value` is false, evaluated per §4a's comparison rules.
 
 This is a client-side check the caller SHOULD perform before ever sending a
 `CommitRequest`, and a check a provider MUST also perform server-side
@@ -132,8 +151,8 @@ A provider processing a `CommitRequest` MUST return exactly one of:
 
 ### 3.3 CommitResult → Receipt
 
-A `Receipt` MUST report a `finality` for each effect the caller needs
-tracked, using `EffectFinality`:
+A `Receipt` MUST report a `finality` for every committed effect, using
+`EffectFinality`, per the fail-clear coverage rule in §7:
 
 - **`FINAL`** — this effect's realized value will not change further.
 - **`PENDING`** — this effect is still in flight (e.g. a refund queued but
@@ -168,33 +187,156 @@ diluting it defeats the purpose of the schema.
 
 ---
 
-## 5. Open issues (non-normative until resolved)
+## 4a. Comparable values and monetary acceptance constraints
 
-These are known ambiguities in v0.1.0, tracked here rather than silently
-resolved one way, so that external reviewers evaluate the same list the
-maintainers see. See also [`/docs/ambiguities.md`](../docs/ambiguities.md)
-for the fuller discussion each of these points expands from.
+`AcceptanceConstraint.value` and any `Effect.value` a profile wants to be
+constrainable are expressed as a `ComparableValue`: a closed, discriminated
+set of generic value **shapes** —
 
-1. **`RefusalReason` extensibility.** The enum in v0.1.0 is closed. Profiles
-   needing a more specific reason must currently overload
-   `PROVIDER_REJECTED`. This is likely too restrictive for real providers
-   and is expected to change before v1.0 — see ambiguities doc §1.
-2. **Partial `effectReceipts`.** The spec permits a `Receipt` to report
-   finality for a subset of a quote's effects "if others are not
-   independently trackable," but does not define how a caller distinguishes
-   "this effect is intentionally untracked" from "this effect's receipt was
-   omitted by provider error." See ambiguities doc §2.
-3. **Structured-value acceptance constraints.** `AcceptanceConstraint.value`
-   is restricted to primitives, but most real effects (money) are naturally
-   structured (`{amount, currency}`). v0.1.0 pushes the currency-aware
-   comparison problem entirely into profiles. See ambiguities doc §3.
-4. **What "quote" being non-mutating actually forbids.** Some providers
-   place a soft, time-limited inventory hold as a side effect of quoting
-   (common in travel). Is that a schema-level violation of "non-mutating,"
-   or an acceptable side channel outside MSE's view? v0.1.0 does not say.
-   See ambiguities doc §4.
-5. **Multiple outstanding quotes against the same target.** The spec does
+```text
+ComparableValue =
+  | { type: "number"; value: number }
+  | { type: "money"; amount: string; currency: string }
+  | { type: "timestamp"; value: string }
+  | { type: "boolean"; value: boolean }
+  | { type: "string"; value: string }
+```
+
+This is a primitive-typing concern, not a domain concept. Recognizing that
+a monetary amount is a decimal number paired with a currency code is no
+more domain-specific than recognizing that a timestamp is a string in a
+particular format; it does not encode anything about fares, SKUs,
+subscription plans, or refund rules, and the core still assigns no meaning
+to which `effectType` uses which variant. This resolves the ambiguity
+formerly tracked as open in `/docs/ambiguities.md` §3 — it does not walk
+back the domain-blindness rule described in §1, because no domain
+vocabulary was added, only a small set of generic comparable-value shapes.
+
+**Comparison MUST follow these rules, fail-closed:**
+
+1. Two `ComparableValue`s are only comparable if they are the same variant
+   (`type`). A `money` bound compared against a `number`-shaped effect
+   value (or vice versa) is not comparable — the constraint MUST be treated
+   as violated, not skipped or treated as vacuously true.
+2. Two `money` values are only comparable if `currency` is identical
+   (case-sensitive, ISO 4217). A currency mismatch MUST be treated as a
+   violation, never as a unit-less numeric comparison of `amount` and never
+   silently converted.
+3. `money.amount` MUST be compared using decimal-safe arithmetic. An
+   implementation MUST NOT parse `amount` into a native IEEE-754 float and
+   compare the floats; doing so can misorder or misequate values a person
+   would consider trivially exact (classic examples: `0.1 + 0.2 !== 0.3` in
+   binary floating point). The reference implementation
+   (`compareDecimalStrings` in
+   [`/src/core/validate.ts`](../src/core/validate.ts)) demonstrates one
+   correct approach: scale both amounts to a shared number of decimal
+   places and compare as integers.
+4. An effect whose `value` is not shaped as any `ComparableValue` variant
+   cannot be constrained by the core mechanism at all. This is not an
+   error by itself — many effects are legitimately non-constrainable
+   opaque payloads — but any `AcceptanceConstraint` naming such an effect
+   MUST be treated as violated (fail-closed), per §3.2.
+
+This makes the brief's own motivating examples normatively enforceable,
+e.g. `fare_delta <= USD 150` is now exactly:
+
+```json
+{
+  "effectType": "travel:fare_delta",
+  "operator": "<=",
+  "value": { "type": "money", "amount": "150.00", "currency": "USD" }
+}
+```
+
+against an effect shaped as
+`{ "type": "money", "amount": "84.00", "currency": "USD" }` — see
+[`/examples/travel/acceptance-constraint.fixture.json`](../examples/travel/acceptance-constraint.fixture.json).
+
+---
+
+## 5. RefusalReason: a small standard vocabulary plus namespaced extensions
+
+`RefusalReason` is not a closed enum. A conformant value is **either**:
+
+- one of five standard reasons: `QUOTE_EXPIRED`, `SNAPSHOT_MISMATCH`,
+  `CONSTRAINT_VIOLATED`, `GUARANTEE_UNKNOWN_AT_COMMIT`, `PROVIDER_REJECTED`;
+- **or** a namespaced extension string `<namespace>:<local_reason>` using
+  the same namespacing convention as `Effect.type` (e.g.
+  `travel:fare_class_closed`, `stripe:card_declined`).
+
+A provider SHOULD use a standard reason when one genuinely applies, so
+that callers written against only the standard vocabulary still get useful
+signal. A provider MUST prefer a namespaced extension reason over
+overloading `PROVIDER_REJECTED` when it has more specific information to
+offer — collapsing everything into `PROVIDER_REJECTED` throws away
+information a caller might reasonably act on differently (e.g. a
+fraud-hold refusal is not retry-worthy in the way a rate-limit refusal
+might be). This resolves the ambiguity formerly tracked as open in
+`/docs/ambiguities.md` §1.
+
+---
+
+## 6. Snapshot and drift detection are provider-defined, not universal
+
+`MutationQuote.snapshot` is opaque, provider-defined precondition material.
+The core does not require:
+
+- a single, shared snapshot/token scheme across providers or profiles;
+- that every write path into a resource (not only MSE-issued commits)
+  update the same tracked value.
+
+A provider or adapter that declares `commitConsistency` other than `NONE`
+MUST document, in its own adapter documentation (not in the core schema),
+what `snapshot` actually contains and what mechanism detects drift against
+it. This is a deliberate scope boundary, not an oversight: MSE standardizes
+*that* a provider can declare a drift-detection consistency level and *what
+the caller should expect* (`SNAPSHOT_REQUIRED` refuses on mismatch,
+`SNAPSHOT_ADVISORY` does not), without standardizing *how* drift detection
+is implemented, since that is inherently tied to each provider's own
+storage and concurrency model. This resolves the ambiguity formerly
+tracked as open in `/docs/ambiguities.md` §5 — by declaring the "universal
+snapshot token" reading out of scope rather than requiring it, not by
+requiring providers to solve a problem the core has no way to enforce
+compliance with in the first place. **This remains a real integration
+hazard for adopters** (see
+[`/docs/security-considerations.md`](../docs/security-considerations.md)
+§4): a provider whose own adapter documentation fails to actually cover
+every write path has a false-confidence gap that no schema check can
+catch.
+
+---
+
+## 7. Receipt coverage: fail-clear, not partial-by-default
+
+A `Receipt.effectReceipts` MUST contain exactly one `EffectReceipt` for
+every effect present in the corresponding `CommitResult.committedEffects`.
+An effect MUST NOT silently disappear from the receipt. An effect that is
+not independently trackable by the provider MUST still appear, with
+`finality: UNKNOWN`, rather than being omitted.
+
+Omitting a committed effect from `effectReceipts` is a conformance
+violation, not a valid partial receipt. This resolves the ambiguity
+formerly tracked as open in `/docs/ambiguities.md` §2, in favor of
+fail-clear semantics: a caller polling for an effect's finality can now
+rely on "absent from every receipt this quoteId ever produces" being
+itself a conformance bug to report, rather than an ambiguous, possibly
+intentional omission.
+
+---
+
+## 8. Open issues (non-normative until resolved)
+
+Four of the five ambiguities originally tracked here were resolved in this
+hardening pass (see §4a, §5, §6, §7 above, and
+[`/docs/ambiguities.md`](../docs/ambiguities.md) for the full before/after
+discussion of each). One remains genuinely open:
+
+1. **Multiple outstanding quotes against the same target.** The spec does
    not say whether a provider must track or reconcile several concurrently
    valid quotes against one `target`, or how `snapshot`-based drift
-   detection interacts when two quotes are open at once. See ambiguities
-   doc §5.
+   detection interacts when two quotes are open at once. §6's resolution
+   (snapshot is provider-defined, adapters document their own drift
+   detection) narrows this somewhat — a provider's documented mechanism is
+   now expected to state its own answer — but the core still does not
+   mandate any particular concurrent-quote policy. See ambiguities doc §5
+   for the fuller discussion, kept open pending real-provider feedback.

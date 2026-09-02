@@ -8,7 +8,7 @@
     "effects": [
       {
         "type": "travel:fare_delta",
-        "value": { "amount": "84.00", "currency": "USD" },
+        "value": { "type": "money", "amount": "84.00", "currency": "USD" },
         "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T15:20:00Z" }
       },
       {

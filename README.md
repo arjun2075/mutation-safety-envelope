@@ -52,10 +52,12 @@ finality**. See [`/spec/normative-spec.md`](spec/normative-spec.md) §2.
 
 ```text
 /schema             Normative JSON Schema (draft 2020-12) — the actual contract
-/spec               Normative spec prose: lifecycle rules, guarantee semantics, open issues
+/spec               Normative spec prose: lifecycle rules, guarantee semantics (incl. money), open issues
 /src/core           TypeScript reference types + validation helpers + a minimal in-memory provider
+/scripts            Standalone tooling, e.g. strict-mode schema compile check
 /test               Behavioral tests (vitest) + schema-conformance tests (ajv) over /examples
 /examples           Four illustrative domain profiles: retail, travel, subscription, contract-billing
+                    — each with a quote fixture and an enforceable monetary AcceptanceConstraint fixture
 /ucp-binding        Non-normative sketch of MSE as a UCP capability
 /docs
   DISCLAIMER.md            Independent-research disclaimer (read this first)
@@ -105,9 +107,10 @@ This is a v0.1.0 external-review candidate, not a finished or
 production-hardened specification. Start with:
 
 1. [`/docs/DISCLAIMER.md`](docs/DISCLAIMER.md) — what MSE is not.
-2. [`/docs/ambiguities.md`](docs/ambiguities.md) — known open design
-   questions, including at least one (structured/currency acceptance
-   constraints) that is currently load-bearing and unresolved.
+2. [`/docs/ambiguities.md`](docs/ambiguities.md) — known design questions;
+   four were resolved in a hardening pass (including monetary acceptance
+   constraints, now enforceable — see `/spec/normative-spec.md` §4a), one
+   (concurrent quotes against the same target) remains genuinely open.
 3. [`/docs/falsification-notes.md`](docs/falsification-notes.md) — what has
    and has not actually been tested.
 4. [`/docs/readiness-report.md`](docs/readiness-report.md) — the

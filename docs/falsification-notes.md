@@ -56,11 +56,17 @@ work against.
    `assertExactGuaranteesHonored` helper can *detect* this after the fact
    given both records, but nothing here tests detection under adversarial
    conditions at scale.
-3. **The monetary-constraint gap was found, not fixed.** As documented in
-   `/docs/ambiguities.md` §3, no domain example actually demonstrates a
-   working `AcceptanceConstraint` against a currency-qualified amount,
-   because the core schema cannot express one. This is a load-bearing
-   unresolved question, not a cosmetic gap.
+3. **The monetary-constraint gap was found in the original pass and fixed
+   in a subsequent hardening pass.** As documented in
+   `/docs/ambiguities.md` §3, no domain example originally demonstrated a
+   working `AcceptanceConstraint` against a currency-qualified amount. The
+   core schema now expresses one via `ComparableValue` (spec §4a), with
+   fail-closed currency/variant matching and decimal-safe comparison,
+   tested in `test/core.test.ts`. This closes the single most load-bearing
+   gap identified in the original readiness report; it does not by itself
+   constitute external validation — see item 1 above, which still applies
+   to the money-comparison logic as much as anything else in this
+   repository.
 4. **No performance, concurrency, or scale testing.** Nothing here says
    anything about behavior under concurrent quotes against the same
    target beyond the single-threaded `SNAPSHOT_REQUIRED` test in

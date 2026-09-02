@@ -37,6 +37,21 @@ export interface DriftSimulator {
   onReceipt?: (quote: MutationQuote, committedEffects: Effect[]) => EffectReceipt[];
 }
 
+/**
+ * Fault-injection hook used to exercise the INDETERMINATE path end-to-end.
+ * A real provider becomes INDETERMINATE when it cannot safely tell whether
+ * a commit it dispatched to some downstream system (a payment processor, a
+ * GDS, a ledger) actually applied — e.g. the connection was lost after the
+ * request was sent but before a response arrived. This hook simulates that:
+ * when `shouldTimeout` returns true for a given commit attempt, `commit()`
+ * behaves as though the request reached an unknown state, WITHOUT ever
+ * knowing itself whether the downstream mutation applied. This mirrors a
+ * real timeout: the provider genuinely cannot resolve it locally.
+ */
+export interface FaultInjector {
+  shouldTimeout?: (request: CommitRequest, quote: MutationQuote) => boolean;
+}
+
 let quoteCounter = 0;
 function nextQuoteId(): string {
   quoteCounter += 1;
@@ -47,10 +62,13 @@ export class ReferenceProvider {
   private quotesById = new Map<string, MutationQuote>();
   private snapshotsByTarget = new Map<string, unknown>();
   private committedByQuoteId = new Map<string, Effect[]>();
+  /** Commit requests whose outcome resolved to INDETERMINATE, keyed by idempotencyKey. */
+  private indeterminateByIdempotencyKey = new Map<string, CommitRequest>();
 
   constructor(
     private readonly quoter: Quoter,
-    private readonly drift: DriftSimulator = {}
+    private readonly drift: DriftSimulator = {},
+    private readonly fault: FaultInjector = {}
   ) {}
 
   /** Registers (or updates) the current snapshot reference for a target resource. */
@@ -102,12 +120,16 @@ export class ReferenceProvider {
       };
     }
 
-    const anyUnknownRelied = quote.effects.some((e) => e.guarantee.mode === "UNKNOWN");
-    if (anyUnknownRelied && request.acceptanceConstraints.length > 0) {
-      // Reference policy only: providers are free to commit UNKNOWN effects
-      // when no constraint depends on them. This branch is unreachable given
-      // evaluateAcceptanceConstraints already fails closed on UNKNOWN, and is
-      // kept only as an explicit documentation point, not dead-code debt.
+    // Fault injection: simulate a downstream timeout where this provider
+    // genuinely cannot determine, at the time it must respond, whether the
+    // mutation applied. This is what a real INDETERMINATE looks like — it
+    // is not a code path the provider "chooses" so much as one forced on it
+    // by an external system's silence.
+    if (this.fault.shouldTimeout?.(request, quote)) {
+      if (request.idempotencyKey) {
+        this.indeterminateByIdempotencyKey.set(request.idempotencyKey, request);
+      }
+      return { quoteId: quote.quoteId, outcome: "INDETERMINATE" };
     }
 
     const committedEffects = this.drift.onCommit
@@ -117,6 +139,39 @@ export class ReferenceProvider {
     this.committedByQuoteId.set(quote.quoteId, committedEffects);
 
     return { quoteId: quote.quoteId, outcome: "APPLIED", committedEffects };
+  }
+
+  /**
+   * Reconciliation for a prior INDETERMINATE commit, keyed by the same
+   * idempotencyKey the original CommitRequest carried. Returns the outcome
+   * the provider can now actually confirm (or 'STILL_INDETERMINATE' if it
+   * still cannot), rather than performing a naive blind resend of commit().
+   * This exists to demonstrate the spec's requirement (§3.2, and
+   * /docs/security-considerations.md §3) that a caller must not treat
+   * INDETERMINATE as safely retryable via a plain repeated commit() call.
+   */
+  reconcileIndeterminateCommit(
+    idempotencyKey: string
+  ): "APPLIED" | "REFUSED" | "STILL_INDETERMINATE" {
+    const pending = this.indeterminateByIdempotencyKey.get(idempotencyKey);
+    if (!pending) return "STILL_INDETERMINATE";
+
+    // In this reference implementation, reconciliation resolves the same
+    // request deterministically once "checked" (simulating, e.g., polling
+    // the downstream system's actual ledger state) rather than resubmitting
+    // it as a new commit — a real provider would look up what actually
+    // happened, not attempt the mutation again.
+    const quote = this.quotesById.get(pending.quoteId);
+    if (!quote) return "REFUSED";
+
+    const committedEffects = this.drift.onCommit
+      ? this.drift.onCommit(quote)
+      : quote.effects.map((e) => ({ ...e }));
+
+    this.committedByQuoteId.set(quote.quoteId, committedEffects);
+    this.indeterminateByIdempotencyKey.delete(idempotencyKey);
+
+    return "APPLIED";
   }
 
   /** Step 3: Commit -> Receipt. */
@@ -133,6 +188,18 @@ export class ReferenceProvider {
             value: e.value,
             settledAt: mutationOutcome === "APPLIED" ? new Date().toISOString() : undefined,
           }));
+
+    // Fail-clear guarantee (spec §7): every committed effect MUST appear in
+    // the receipt, even one an onReceipt override forgot. Rather than only
+    // asserting this in tests, the reference provider enforces it here so
+    // an omission can never leave this implementation's own output non-
+    // conformant.
+    const receiptedTypes = new Set(effectReceipts.map((r) => r.effectType));
+    for (const effect of committedEffects) {
+      if (!receiptedTypes.has(effect.type)) {
+        effectReceipts.push({ effectType: effect.type, finality: "UNKNOWN" });
+      }
+    }
 
     return { quoteId, mutationOutcome, effectReceipts };
   }

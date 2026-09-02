@@ -84,12 +84,12 @@
           "description": "Opaque reference to the resource this quote applies to. SHOULD match the `target` of the originating MutationProposal."
         },
         "snapshot": {
-          "description": "Opaque, domain-defined reference or hash representing the state of `target` at quote time (e.g. a version, ETag, or content hash). Used by a provider to detect drift between quote and commit. Optional: not every provider can offer a snapshot reference."
+          "description": "Opaque, provider-defined precondition material representing the state of `target` at quote time (e.g. a version, ETag, content hash, or provider-internal token). The core assigns this value no shape or meaning and does not require it to be a universally comparable/updatable token — it is whatever the provider needs to detect drift by whatever mechanism the provider actually implements. A profile/adapter declaring `commitConsistency` other than NONE MUST document, in its own adapter documentation, what `snapshot` contains and how drift is actually detected (see /spec/normative-spec.md §6); the core does not and cannot verify this from the schema alone. Optional: not every provider can offer a snapshot reference."
         },
         "effects": {
           "type": "array",
           "items": { "$ref": "#/$defs/Effect" },
-          "description": "Predicted consequences of committing this quote. MAY be empty (a no-op or purely structural change), but the array key MUST be present."
+          "description": "Predicted consequences of committing this quote. MAY be empty (a no-op or purely structural change), but the array key MUST be present. Quoting MUST NOT commit the proposed commercial mutation itself (see /spec/normative-spec.md §3.1). A provider MAY create a temporary, reversible reservation or hold as a side effect of quoting (e.g. a short inventory hold), but only if that hold is itself disclosed here as an Effect (e.g. `travel:inventory_hold`) — an undisclosed hold is not permitted, per the same section."
         },
         "expiresAt": {
           "type": "string",
@@ -100,7 +100,7 @@
           "type": "string",
           "enum": ["SNAPSHOT_REQUIRED", "SNAPSHOT_ADVISORY", "NONE"],
           "default": "NONE",
-          "description": "Declares how a provider will use `snapshot` at commit time. SNAPSHOT_REQUIRED: commit MUST be refused if the resource's current state does not match snapshot. SNAPSHOT_ADVISORY: provider MAY warn or re-quote on drift but is not required to refuse. NONE: no snapshot-based drift detection is offered."
+          "description": "Declares how a provider will use `snapshot` at commit time. SNAPSHOT_REQUIRED: commit MUST be refused if the resource's current state does not match snapshot, by whatever provider-defined comparison the adapter documents. SNAPSHOT_ADVISORY: provider MAY warn or re-quote on drift but is not required to refuse. NONE: no snapshot-based drift detection is offered. The core does not require a universal/shared snapshot token scheme across providers, and does not require every mutation path into a resource to update the same tracked value — see /spec/normative-spec.md §6."
         }
       }
     },
@@ -108,6 +108,66 @@
     "ComparisonOperator": {
       "type": "string",
       "enum": ["<=", ">=", "==", "!="]
+    },
+
+    "ComparableValue": {
+      "description": "A discriminated, domain-blind comparable value. This is a closed set of generic value SHAPES (number, money, timestamp, boolean, string) — not a set of domain concepts. Recognizing that a monetary amount carries a currency code is a primitive-typing concern, not a fare/SKU/plan/refund concept, and does not violate core domain-blindness (see /spec/normative-spec.md §4a). A profile's Effect.value MAY use this shape for any effect it wants to be constrainable via AcceptanceConstraint; the core assigns no domain meaning to which effectType uses which ComparableValue variant.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "number" },
+            "value": { "type": "number" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "amount", "currency"],
+          "properties": {
+            "type": { "const": "money" },
+            "amount": {
+              "type": "string",
+              "pattern": "^-?[0-9]+(\\.[0-9]+)?$",
+              "description": "Decimal amount encoded as a string (never a binary float) so implementations compare it with decimal-safe arithmetic instead of IEEE-754 floating point."
+            },
+            "currency": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$",
+              "description": "ISO 4217 currency code."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "timestamp" },
+            "value": { "type": "string", "format": "date-time" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "boolean" },
+            "value": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "string" },
+            "value": { "type": "string" }
+          }
+        }
+      ]
     },
 
     "AcceptanceConstraint": {
@@ -122,7 +182,8 @@
         },
         "operator": { "$ref": "#/$defs/ComparisonOperator" },
         "value": {
-          "description": "Primitive comparable bound (number, string, or boolean). The core does not support comparing structured/object values; a profile that needs to compare structured effect values (e.g. currency-qualified amounts) MUST define and document its own comparison semantics for that effectType, and note this is a deliberate core limitation, not an oversight."
+          "$ref": "#/$defs/ComparableValue",
+          "description": "Bound expressed as a ComparableValue. Comparison rules (normative, see spec §4a): a constraint MUST fail closed (be treated as violated) if the matching effect's value is not itself a ComparableValue of the identical variant `type` as this bound (e.g. a `money` bound against a `number`-typed effect value fails closed), and a `money` bound additionally MUST fail closed if `currency` does not match exactly. Money comparison MUST be performed with decimal-safe arithmetic over the `amount` string, never by parsing it into a native binary float."
         }
       }
     },
@@ -153,15 +214,23 @@
 
     "RefusalReason": {
       "type": "string",
-      "enum": [
-        "QUOTE_EXPIRED",
-        "SNAPSHOT_MISMATCH",
-        "CONSTRAINT_VIOLATED",
-        "GUARANTEE_UNKNOWN_AT_COMMIT",
-        "PROVIDER_REJECTED"
-      ],
-      "description": "Non-exhaustive, extensible in profiles via additional string values outside this enum is NOT permitted by this core schema version; profiles needing more reasons SHOULD map to PROVIDER_REJECTED and carry detail in an out-of-band/provider-specific field. This is flagged as an open ambiguity — see spec/normative-spec.md §Open Issues."
-      },
+      "description": "A small standard vocabulary of core reasons, plus an open, namespaced extension mechanism for provider- or profile-specific reasons that do not fit the standard set. A conformant value is EITHER one of the five standard reasons below, OR a namespaced string in the form `<namespace>:<local_reason>` using the same namespacing convention as Effect.type (e.g. `travel:fare_class_closed`, `stripe:card_declined`). Providers SHOULD prefer a standard reason when one genuinely applies, and MUST use a namespaced extension rather than overloading PROVIDER_REJECTED when a more specific reason is available, so callers are not forced to lose information the provider actually has. See /spec/normative-spec.md §5 (formerly listed as an open ambiguity; resolved in v0.1.0 by this extension mechanism).",
+      "oneOf": [
+        {
+          "enum": [
+            "QUOTE_EXPIRED",
+            "SNAPSHOT_MISMATCH",
+            "CONSTRAINT_VIOLATED",
+            "GUARANTEE_UNKNOWN_AT_COMMIT",
+            "PROVIDER_REJECTED"
+          ]
+        },
+        {
+          "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$",
+          "description": "Namespaced provider/profile-specific extension reason, e.g. `travel:fare_class_closed`."
+        }
+      ]
+    },
 
     "CommitResult": {
       "type": "object",
@@ -227,7 +296,7 @@
         "effectReceipts": {
           "type": "array",
           "items": { "$ref": "#/$defs/EffectReceipt" },
-          "description": "Finality state for each effect the caller needs tracked. MAY be a subset of the quote's effects if others are not independently trackable; this is a known ambiguity (see spec)."
+          "description": "Finality state for each effect from the committed quote. Normative rule (resolved in v0.1.0; see /spec/normative-spec.md §7): a provider MUST include exactly one EffectReceipt for every effect present in committedEffects — an effect MUST NOT silently disappear from the receipt. An effect that is not independently trackable MUST still appear, with finality UNKNOWN, rather than being omitted. Omission of a committed effect from effectReceipts is a conformance violation, not a valid receipt."
         }
       }
     }

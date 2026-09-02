@@ -8,12 +8,12 @@
     "effects": [
       {
         "type": "retail:order_total_delta",
-        "value": { "amount": "12.50", "currency": "USD" },
+        "value": { "type": "money", "amount": "12.50", "currency": "USD" },
         "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T18:00:00Z" }
       },
       {
         "type": "retail:shipping_fee",
-        "value": { "amount": "12.50", "currency": "USD" },
+        "value": { "type": "money", "amount": "12.50", "currency": "USD" },
         "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T18:00:00Z" }
       }
     ]

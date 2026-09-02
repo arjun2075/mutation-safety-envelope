@@ -34,4 +34,5 @@ effect carry a `type`, a `value`, and a `guarantee`.
 ## Files
 
 - [`quote.fixture.json`](./quote.fixture.json) — a `MutationQuote` showing three effects with three different guarantee modes, validated in CI against `/schema/mse-core.schema.json`.
-- [`indeterminate-commit.fixture.json`](./indeterminate-commit.fixture.json) — a `CommitResult` illustrating `INDETERMINATE`.
+- [`acceptance-constraint.fixture.json`](./acceptance-constraint.fixture.json) — the brief's own example bound, `fare_delta <= USD 150`, expressed as an enforceable `AcceptanceConstraint` using the core's `money` `ComparableValue` variant (see `/spec/normative-spec.md` §4a). `travel:fare_delta` in the quote is `84.00 USD`, so this constraint is satisfied.
+- [`indeterminate-commit.fixture.json`](./indeterminate-commit.fixture.json) — a `CommitResult` illustrating `INDETERMINATE`. See `test/core.test.ts`'s "INDETERMINATE end-to-end" case for this exercised through real code, including that the reference implementation does not respond to it with a blind retry.

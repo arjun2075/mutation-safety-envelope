@@ -1,0 +1,12 @@
+{
+  "commitRequest": {
+    "quoteId": "quote_sub_5591_1",
+    "acceptanceConstraints": [
+      {
+        "effectType": "subscription:recurring_amount",
+        "operator": "<=",
+        "value": { "type": "money", "amount": "2000.00", "currency": "USD" }
+      }
+    ]
+  }
+}

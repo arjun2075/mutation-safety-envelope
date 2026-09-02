@@ -24,7 +24,11 @@ export interface Guarantee {
 export interface Effect {
   /** `<namespace>:<local_name>`, e.g. "retail:order_total_delta". Opaque to the core. */
   type: string;
-  /** Domain-defined payload. Opaque to the core. */
+  /**
+   * Domain-defined payload. Opaque to the core in general. A profile MAY
+   * (but need not) shape this as a ComparableValue when it wants the effect
+   * to be usable in an AcceptanceConstraint — see ComparableValue.
+   */
   value: unknown;
   guarantee: Guarantee;
 }
@@ -54,12 +58,23 @@ export interface MutationQuote {
 
 export type ComparisonOperator = "<=" | ">=" | "==" | "!=";
 
+/**
+ * A discriminated, domain-blind comparable value. This is a closed set of
+ * generic value SHAPES, not domain concepts — see /spec/normative-spec.md §4a
+ * for why a `money` variant does not violate core domain-blindness.
+ */
+export type ComparableValue =
+  | { type: "number"; value: number }
+  | { type: "money"; amount: string; currency: string }
+  | { type: "timestamp"; value: string }
+  | { type: "boolean"; value: boolean }
+  | { type: "string"; value: string };
+
 /** A principal/agent-defined bound checked against the final pre-commit quote. */
 export interface AcceptanceConstraint {
   effectType: string;
   operator: ComparisonOperator;
-  /** Primitive comparable value only — see spec for why structured values are out of scope. */
-  value: string | number | boolean;
+  value: ComparableValue;
 }
 
 export interface CommitRequest {
@@ -71,12 +86,17 @@ export interface CommitRequest {
 
 export type CommitOutcome = "APPLIED" | "REFUSED" | "INDETERMINATE";
 
+/**
+ * Five standard reasons, or a namespaced extension `<namespace>:<local_reason>`
+ * (e.g. "travel:fare_class_closed"). See /spec/normative-spec.md §5.
+ */
 export type RefusalReason =
   | "QUOTE_EXPIRED"
   | "SNAPSHOT_MISMATCH"
   | "CONSTRAINT_VIOLATED"
   | "GUARANTEE_UNKNOWN_AT_COMMIT"
-  | "PROVIDER_REJECTED";
+  | "PROVIDER_REJECTED"
+  | (string & {});
 
 export interface CommitResult {
   quoteId: string;
@@ -101,5 +121,11 @@ export interface EffectReceipt {
 export interface Receipt {
   quoteId: string;
   mutationOutcome: CommitOutcome;
+  /**
+   * MUST contain exactly one entry per effect in the corresponding
+   * CommitResult.committedEffects — an effect must not silently disappear.
+   * An untrackable effect MUST still appear, with finality UNKNOWN, rather
+   * than being omitted. See /spec/normative-spec.md §7.
+   */
   effectReceipts: EffectReceipt[];
 }

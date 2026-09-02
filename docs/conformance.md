@@ -17,9 +17,10 @@ A provider claiming MSE v0.1.0 conformance MUST:
 
 1. Produce `MutationQuote` documents that validate against
    [`/schema/mse-core.schema.json`](../schema/mse-core.schema.json).
-2. Treat producing a quote as non-mutating (see spec §3.1 and the open
-   question in `/docs/ambiguities.md` §4 about the exact boundary of this
-   rule).
+2. Treat producing a quote as non-mutating: it MUST NOT commit the
+   requested commercial mutation itself. A disclosed, reversible
+   reservation/hold (surfaced as an `Effect`) is the one permitted
+   exception (see spec §3.1 and `/docs/ambiguities.md` §4).
 3. Never mark an `Effect.guarantee.mode` as `EXACT` unless prepared to
    honor it per spec §3.1 and §4.
 4. Evaluate every `AcceptanceConstraint` fail-closed per spec §3.2 before
@@ -71,12 +72,14 @@ review is for.
 
 ## Known conformance gaps in this repository itself, today
 
-- The domain examples in `/examples` are quote-only fixtures; none of them
-  wire a full proposal→quote→commit→receipt run through `ReferenceProvider`
-  yet. `test/core.test.ts` exercises the full lifecycle only with
-  synthetic (non-domain) effect types. See
+- The domain examples in `/examples` are quote/constraint fixtures; none of
+  them wire a full proposal→quote→commit→receipt run through
+  `ReferenceProvider` yet. `test/core.test.ts` exercises the full lifecycle
+  only with synthetic (non-domain) effect types. See
   [`/docs/readiness-report.md`](./readiness-report.md) for this listed as
   an open risk.
-- `AcceptanceConstraint` cannot express a currency-qualified bound (see
-  `/docs/ambiguities.md` §3), so no domain example in this repository
-  demonstrates a working monetary acceptance constraint end-to-end.
+- `AcceptanceConstraint` **can** express a currency-qualified bound as of
+  the v0.1.0 hardening pass (see `/spec/normative-spec.md` §4a and
+  `/docs/ambiguities.md` §3) — every domain example now includes an
+  `acceptance-constraint.fixture.json` demonstrating this, including the
+  brief's own `fare_delta <= USD 150` example under `/examples/travel`.

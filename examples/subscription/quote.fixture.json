@@ -6,12 +6,12 @@
     "effects": [
       {
         "type": "subscription:recurring_amount",
-        "value": { "amount": "1500.00", "currency": "USD" },
+        "value": { "type": "money", "amount": "1500.00", "currency": "USD" },
         "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T14:00:00Z" }
       },
       {
         "type": "subscription:proration_credit",
-        "value": { "amount": "212.34", "currency": "USD" },
+        "value": { "type": "money", "amount": "212.34", "currency": "USD" },
         "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T14:00:00Z" }
       }
     ]

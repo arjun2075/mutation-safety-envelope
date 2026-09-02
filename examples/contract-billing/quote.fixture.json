@@ -7,7 +7,7 @@
     "effects": [
       {
         "type": "contract:credit_amount",
-        "value": { "amount": "500.00", "currency": "USD" },
+        "value": { "type": "money", "amount": "500.00", "currency": "USD" },
         "guarantee": { "mode": "EXACT" }
       }
     ]

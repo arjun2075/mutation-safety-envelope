@@ -1,0 +1,12 @@
+{
+  "commitRequest": {
+    "quoteId": "quote_ctr_2201_1",
+    "acceptanceConstraints": [
+      {
+        "effectType": "contract:credit_amount",
+        "operator": "<=",
+        "value": { "type": "money", "amount": "500.00", "currency": "USD" }
+      }
+    ]
+  }
+}

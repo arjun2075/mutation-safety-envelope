@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "validate-schema": "ajv compile -s schema/mse-core.schema.json --spec=draft2020",
+    "validate-schema": "node scripts/validate-schema.mjs",
     "lint:examples": "node --experimental-vm-modules ./node_modules/.bin/tsx test/schema-conformance.test.ts"
   },
   "devDependencies": {

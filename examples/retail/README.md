@@ -31,3 +31,4 @@ would define additional, retail-namespaced effect types (e.g.
 ## Files
 
 - [`quote.fixture.json`](./quote.fixture.json) — a `MutationQuote` for this scenario, validated in CI against `/schema/mse-core.schema.json`.
+- [`acceptance-constraint.fixture.json`](./acceptance-constraint.fixture.json) — an `AcceptanceConstraint` bounding `retail:order_total_delta <= USD 20.00` using the core's `money` `ComparableValue` variant.

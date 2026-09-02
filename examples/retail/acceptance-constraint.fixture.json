@@ -1,0 +1,12 @@
+{
+  "commitRequest": {
+    "quoteId": "quote_retail_8842_1",
+    "acceptanceConstraints": [
+      {
+        "effectType": "retail:order_total_delta",
+        "operator": "<=",
+        "value": { "type": "money", "amount": "20.00", "currency": "USD" }
+      }
+    ]
+  }
+}

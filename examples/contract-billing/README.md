@@ -28,3 +28,4 @@ model.
 ## Files
 
 - [`quote.fixture.json`](./quote.fixture.json) — validated in CI against `/schema/mse-core.schema.json`.
+- [`acceptance-constraint.fixture.json`](./acceptance-constraint.fixture.json) — bounds `contract:credit_amount <= USD 500.00`.
