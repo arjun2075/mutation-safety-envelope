@@ -1,6 +1,6 @@
 # Contract / billing amendment — MSE example
 
-**Status:** illustrative domain example. Not part of the MSE core.
+**Status:** modeled/tested example domain. Illustrative only, not part of the MSE core, and not evidence of external validation or industry adoption.
 
 ## Scenario
 

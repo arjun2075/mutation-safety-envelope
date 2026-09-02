@@ -56,8 +56,9 @@ finality**. See [`/spec/normative-spec.md`](spec/normative-spec.md) §2.
 /src/core           TypeScript reference types + validation helpers + a minimal in-memory provider
 /scripts            Standalone tooling, e.g. strict-mode schema compile check
 /test               Behavioral tests (vitest) + schema-conformance tests (ajv) over /examples
-/examples           Four illustrative domain profiles: retail, travel, subscription, contract-billing
-                    — each with a quote fixture and an enforceable monetary AcceptanceConstraint fixture
+/examples           Four modeled/tested example domains: retail, travel, subscription, contract-billing
+                    — each with a quote fixture and an enforceable monetary AcceptanceConstraint fixture.
+                    These are illustrative examples only, not evidence of external validation or adoption.
 /ucp-binding        Non-normative sketch of MSE as a UCP capability
 /docs
   DISCLAIMER.md            Independent-research disclaimer (read this first)

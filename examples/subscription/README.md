@@ -1,6 +1,6 @@
 # Subscription change — MSE example
 
-**Status:** illustrative domain example. Not part of the MSE core.
+**Status:** modeled/tested example domain. Illustrative only, not part of the MSE core, and not evidence of external validation or industry adoption.
 
 The handoff brief that seeded this repository notes that subscription
 changes were the *original* domain used to investigate this safety pattern,
