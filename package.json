@@ -1,6 +1,6 @@
 {
   "name": "mutation-safety-envelope",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Experimental safety envelope for agent-initiated mutations to existing commercial state. Independent research proposal; not an official spec of any vendor or standards body.",
   "license": "Apache-2.0",
   "private": true,
@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "validate-schema": "node scripts/validate-schema.mjs",
-    "lint:examples": "node --experimental-vm-modules ./node_modules/.bin/tsx test/schema-conformance.test.ts"
+    "lint:examples": "node --experimental-vm-modules ./node_modules/.bin/tsx test/schema-conformance.test.ts",
+    "ci": "npm test && npm run build && npm run validate-schema"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

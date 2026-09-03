@@ -52,3 +52,162 @@ describe("domain example fixtures conform to the core schema", () => {
     });
   }
 });
+
+describe("v0.2.0 negative cases — the schema must reject these (spec §1b, §4b)", () => {
+  it("(F) rejects an INDETERMINATE unitResult with no reconciliation at all", () => {
+    const doc = {
+      commitResult: {
+        quoteId: "q1",
+        unitResults: [{ unitRef: "unit_a", outcome: "INDETERMINATE" }],
+      },
+    };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("(F) rejects reconciliation with mode MACHINE_RESOLVABLE and no correlationId", () => {
+    const doc = {
+      commitResult: {
+        quoteId: "q1",
+        unitResults: [
+          {
+            unitRef: "unit_a",
+            outcome: "INDETERMINATE",
+            reconciliation: { mode: "MACHINE_RESOLVABLE" },
+          },
+        ],
+      },
+    };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("(F) rejects reconciliation with mode NONE that still carries a correlationId", () => {
+    const doc = {
+      commitResult: {
+        quoteId: "q1",
+        unitResults: [
+          {
+            unitRef: "unit_a",
+            outcome: "INDETERMINATE",
+            reconciliation: { mode: "NONE", correlationId: "should-not-be-here" },
+          },
+        ],
+      },
+    };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects an INDETERMINATE unitResult that also claims committedEffects", () => {
+    const doc = {
+      commitResult: {
+        quoteId: "q1",
+        unitResults: [
+          {
+            unitRef: "unit_a",
+            outcome: "INDETERMINATE",
+            reconciliation: { mode: "NONE" },
+            committedEffects: [
+              {
+                effectId: "e1",
+                type: "retail:order_total_delta",
+                value: { type: "money", amount: "1.00", currency: "USD" },
+                guarantee: { mode: "EXACT" },
+              },
+            ],
+          },
+        ],
+      },
+    };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects a REFUSED unitResult with no refusalReason", () => {
+    const doc = {
+      commitResult: {
+        quoteId: "q1",
+        unitResults: [{ unitRef: "unit_a", outcome: "REFUSED" }],
+      },
+    };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects a CommitResult with an empty unitResults array (minItems: 1)", () => {
+    const doc = { commitResult: { quoteId: "q1", unitResults: [] } };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects a MutationQuote with an empty units array (minItems: 1)", () => {
+    const doc = { quote: { quoteId: "q1", target: {}, units: [] } };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects a MutationQuote using the removed v0.1.0 top-level `effects` field", () => {
+    const doc = {
+      quote: {
+        quoteId: "q1",
+        target: {},
+        effects: [
+          {
+            effectId: "e1",
+            type: "retail:order_total_delta",
+            value: { type: "money", amount: "1.00", currency: "USD" },
+            guarantee: { mode: "EXACT" },
+          },
+        ],
+      },
+    };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects a CommitResult using the removed v0.1.0 top-level `outcome` field", () => {
+    const doc = { commitResult: { quoteId: "q1", outcome: "APPLIED" } };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects a Receipt using the removed v0.1.0 top-level `mutationOutcome` field", () => {
+    const doc = {
+      receipt: { quoteId: "q1", mutationOutcome: "APPLIED", effectReceipts: [] },
+    };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects an AcceptanceConstraint using the removed v0.1.0 `effectType` field", () => {
+    const doc = {
+      commitRequest: {
+        quoteId: "q1",
+        acceptanceConstraints: [
+          {
+            effectType: "retail:order_total_delta",
+            operator: "<=",
+            value: { type: "money", amount: "1.00", currency: "USD" },
+          },
+        ],
+      },
+    };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("accepts a well-formed MIXED CommitResult (spec §1c) without an authoritative top-level outcome", () => {
+    const doc = {
+      commitResult: {
+        quoteId: "q1",
+        unitResults: [
+          {
+            unitRef: "unit_a",
+            outcome: "APPLIED",
+            committedEffects: [
+              {
+                effectId: "e1",
+                type: "retail:order_total_delta",
+                value: { type: "money", amount: "1.00", currency: "USD" },
+                guarantee: { mode: "EXACT" },
+              },
+            ],
+          },
+          { unitRef: "unit_b", outcome: "REFUSED", refusalReason: "CONSTRAINT_VIOLATED" },
+        ],
+        aggregateHint: "MIXED",
+      },
+    };
+    expect(validate(doc)).toBe(true);
+  });
+});

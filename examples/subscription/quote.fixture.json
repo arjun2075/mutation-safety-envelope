@@ -3,16 +3,23 @@
     "quoteId": "quote_sub_5591_1",
     "target": { "subscriptionId": "sub_5591" },
     "expiresAt": "2026-09-02T14:00:00Z",
-    "effects": [
+    "units": [
       {
-        "type": "subscription:recurring_amount",
-        "value": { "type": "money", "amount": "1500.00", "currency": "USD" },
-        "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T14:00:00Z" }
-      },
-      {
-        "type": "subscription:proration_credit",
-        "value": { "type": "money", "amount": "212.34", "currency": "USD" },
-        "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T14:00:00Z" }
+        "unitRef": "sub_5591:seat_count_change",
+        "effects": [
+          {
+            "effectId": "sub_5591:seat_count_change:recurring_amount",
+            "type": "subscription:recurring_amount",
+            "value": { "type": "money", "amount": "1500.00", "currency": "USD" },
+            "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T14:00:00Z" }
+          },
+          {
+            "effectId": "sub_5591:seat_count_change:proration_credit",
+            "type": "subscription:proration_credit",
+            "value": { "type": "money", "amount": "212.34", "currency": "USD" },
+            "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T14:00:00Z" }
+          }
+        ]
       }
     ]
   }

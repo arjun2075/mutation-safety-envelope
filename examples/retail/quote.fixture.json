@@ -5,16 +5,23 @@
     "snapshot": { "orderVersion": 7 },
     "commitConsistency": "SNAPSHOT_REQUIRED",
     "expiresAt": "2026-09-02T18:00:00Z",
-    "effects": [
+    "units": [
       {
-        "type": "retail:order_total_delta",
-        "value": { "type": "money", "amount": "12.50", "currency": "USD" },
-        "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T18:00:00Z" }
-      },
-      {
-        "type": "retail:shipping_fee",
-        "value": { "type": "money", "amount": "12.50", "currency": "USD" },
-        "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T18:00:00Z" }
+        "unitRef": "order_8842:shipping_change",
+        "effects": [
+          {
+            "effectId": "order_8842:shipping_change:order_total_delta",
+            "type": "retail:order_total_delta",
+            "value": { "type": "money", "amount": "12.50", "currency": "USD" },
+            "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T18:00:00Z" }
+          },
+          {
+            "effectId": "order_8842:shipping_change:shipping_fee",
+            "type": "retail:shipping_fee",
+            "value": { "type": "money", "amount": "12.50", "currency": "USD" },
+            "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T18:00:00Z" }
+          }
+        ]
       }
     ]
   }

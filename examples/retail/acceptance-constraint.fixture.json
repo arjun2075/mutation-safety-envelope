@@ -3,7 +3,7 @@
     "quoteId": "quote_retail_8842_1",
     "acceptanceConstraints": [
       {
-        "effectType": "retail:order_total_delta",
+        "effectId": "order_8842:shipping_change:order_total_delta",
         "operator": "<=",
         "value": { "type": "money", "amount": "20.00", "currency": "USD" }
       }

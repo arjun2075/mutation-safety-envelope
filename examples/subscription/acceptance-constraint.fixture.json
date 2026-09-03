@@ -3,7 +3,7 @@
     "quoteId": "quote_sub_5591_1",
     "acceptanceConstraints": [
       {
-        "effectType": "subscription:recurring_amount",
+        "effectId": "sub_5591:seat_count_change:recurring_amount",
         "operator": "<=",
         "value": { "type": "money", "amount": "2000.00", "currency": "USD" }
       }

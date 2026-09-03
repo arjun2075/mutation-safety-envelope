@@ -1,15 +1,21 @@
-# Ambiguities in the source handoff brief and v0.1.0 design
+# Ambiguities in the source handoff brief and v0.1.0/v0.2.0 design
 
 This document exists because the task that produced this repository
 required surfacing ambiguity *before* publication, not resolving it
-silently. Each item below states the ambiguity, what v0.1.0 originally
-chose, and — following a subsequent hardening pass — what was resolved and
-how, or why it remains open.
+silently. Each item below states the ambiguity, what was originally
+chosen, and what was resolved and how, or why it remains open — across
+both the v0.1.0 hardening pass and the v0.2.0 review-hardening revision.
 
-**Status as of the hardening pass:** 4 of 5 originally-flagged ambiguities
-are now resolved at the schema/spec level. One (concurrent quotes) remains
-genuinely open. Resolutions are minimal and do not add domain scope — see
-`/spec/normative-spec.md` §4a, §5, §6, §7 for the normative text.
+**Status as of v0.2.0:** All 5 originally-flagged v0.1.0 ambiguities are
+resolved at the schema/spec level (§1-§5 below). External review (UCP
+Discussion #799) additionally falsified two v0.1.0 design assumptions
+(mutation-wide commit outcome; no INDETERMINATE resolution contract),
+addressed in v0.2.0 — see
+[`/docs/v0.2-review-response.md`](./v0.2-review-response.md) for the full
+account, and §6-§8 below for the ambiguities that revision itself
+surfaced. Three ambiguities remain genuinely open: concurrent quotes (§5,
+carried from v0.1.0), per-unit consistency policy (§7), and cross-unit
+shared effects (§8).
 
 ---
 
@@ -40,17 +46,20 @@ are unchanged and still the expected common case.
 a quote's effects, with no way to distinguish "intentionally untracked"
 from "silently dropped by provider bug."
 
-**Resolution:** Fail-clear semantics: `Receipt.effectReceipts` MUST now
-contain exactly one entry for every effect in `CommitResult.committedEffects`.
+**Resolution:** Fail-clear semantics: `Receipt.effectReceipts` MUST
+contain exactly one entry for every effect committed across every unit
+(as of v0.2.0: every effect in every `UnitResult.committedEffects` — see
+`/spec/normative-spec.md` §6a; the field was `CommitResult.committedEffects`
+in the original v0.1.0 resolution, before the v0.2.0 per-unit revision).
 An untrackable effect MUST still appear, with `finality: UNKNOWN`, rather
-than being omitted. Omission is now explicitly a conformance violation. See
-`/spec/normative-spec.md` §7. The reference implementation enforces this
-directly: `ReferenceProvider.receipt()` back-fills any effect a
+than being omitted. Omission is now explicitly a conformance violation.
+The reference implementation enforces this directly:
+`ReferenceProvider.receipt()` back-fills any effect a
 `DriftSimulator.onReceipt` override forgot with `finality: UNKNOWN` rather
 than allowing an omission to reach the caller, and
 `assertReceiptCoversAllCommittedEffects` in `/src/core/validate.ts` lets
-any implementation check this mechanically. See
-`test/core.test.ts`'s "receipt fail-clear" tests.
+any implementation check this mechanically (now across all units'
+committed effects). See `test/core.test.ts`'s "receipt fail-clear" tests.
 
 ---
 
@@ -126,3 +135,70 @@ unilaterally here risks guessing wrong in a way that's expensive to walk
 back post-v1.0. Deliberately left for external review rather than
 resolved by fiat, per the explicit instruction not to expand scope or
 redesign the protocol in this pass.
+
+---
+
+## 6. Mutation-wide commit outcome collapses multi-unit results — **RESOLVED in v0.2.0**
+
+**Ambiguity/falsification:** v0.1.0's `CommitResult.outcome` was a single
+mutation-wide scalar (`APPLIED`/`REFUSED`/`INDETERMINATE`). External
+review (UCP Discussion #799) identified that a single mutation attempt can
+legitimately span multiple independently committing units — e.g. one order
+line applies while another is refused — and that a single scalar cannot
+represent this without discarding real information.
+
+**Resolution:** `MutationQuote.units: CommittingUnit[]` and
+`CommitResult.unitResults: UnitResult[]` — one result per unit, with
+complete-coverage enforcement (no silent omission) and an explicitly
+non-authoritative `aggregateHint` convenience field. See
+`/spec/normative-spec.md` §1a-§1c and
+[`/docs/v0.2-review-response.md`](./v0.2-review-response.md) for the full
+account. This is a breaking schema change, not an additive one — see
+`/spec/normative-spec.md` §9 for the compatibility table.
+
+---
+
+## 7. INDETERMINATE had no normative resolution contract — **RESOLVED in v0.2.0**
+
+**Ambiguity/falsification:** v0.1.0 told a caller not to retry
+`INDETERMINATE` blindly but exposed no normative way to actually resolve
+the uncertainty — only the reference implementation happened to have a
+reconciliation helper, and nothing required any other implementation to
+offer an equivalent.
+
+**Resolution:** Every `INDETERMINATE` `UnitResult` now MUST carry a
+`Reconciliation` object (`mode`: `MACHINE_RESOLVABLE` /
+`AUTHORITATIVE_READ` / `NONE`, plus `correlationId` when a real path
+exists). A binding exposing a real path MUST document how it is invoked,
+how it correlates back to the original attempt, how its result maps to
+the same unit, and that it resolves the prior attempt rather than
+replaying the mutation. See `/spec/normative-spec.md` §4b-§4c. The
+reference implementation demonstrates reconciliation resolving to
+`APPLIED`, to `REFUSED`, and remaining unresolved — deliberately not
+hardcoded to always succeed.
+
+**New, narrower ambiguity surfaced by this resolution:** whether
+`commitConsistency`/`snapshot` (§6 above) should be expressible per-unit
+now that a quote can have multiple units with potentially different
+consistency needs. v0.2.0 keeps `commitConsistency` at the whole-quote
+level rather than guessing at a per-unit shape without real-provider
+motivation. Left open — see `/spec/normative-spec.md` §8.
+
+---
+
+## 8. Cross-unit / shared effects — **OPEN (surfaced by v0.2.0)**
+
+**Ambiguity:** v0.2.0's model assumes every `Effect` belongs to exactly
+one `CommittingUnit`. It has no representation for an effect that is a
+genuine joint consequence of more than one unit — for example, one
+combined tax recalculation resulting from edits to two different order
+lines in the same mutation attempt.
+
+**Why this stays open:** Neither obvious fix is clearly correct without
+real-provider input: arbitrarily assigning the shared effect to one unit
+misrepresents causality (it implies that unit alone produced it), while
+duplicating it across units under separate `effectId`s misrepresents one
+effect as two. Resolving this without a concrete example of a real
+provider actually needing to represent a cross-unit effect risks guessing
+wrong in a way that would be expensive to walk back. See
+`/spec/normative-spec.md` §7a and §8 for the normative discussion.

@@ -1,6 +1,16 @@
 {
   "commitResult": {
     "quoteId": "quote_travel_abc123_1",
-    "outcome": "INDETERMINATE"
+    "unitResults": [
+      {
+        "unitRef": "abc123:seg_2:reshop",
+        "outcome": "INDETERMINATE",
+        "reconciliation": {
+          "mode": "MACHINE_RESOLVABLE",
+          "correlationId": "reconcile_travel_abc123_1_7f3a",
+          "reference": { "operation": "travel:reshop_status_check", "pnr": "ABC123" }
+        }
+      }
+    ]
   }
 }
