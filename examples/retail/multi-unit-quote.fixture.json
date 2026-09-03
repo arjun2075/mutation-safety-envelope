@@ -1,0 +1,31 @@
+{
+  "quote": {
+    "quoteId": "quote_retail_9901_1",
+    "target": { "orderId": "order_9901" },
+    "expiresAt": "2026-09-02T18:00:00Z",
+    "units": [
+      {
+        "unitRef": "order_9901:line_1_qty_change",
+        "effects": [
+          {
+            "effectId": "order_9901:line_1:order_total_delta",
+            "type": "retail:order_total_delta",
+            "value": { "type": "money", "amount": "15.00", "currency": "USD" },
+            "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T18:00:00Z" }
+          }
+        ]
+      },
+      {
+        "unitRef": "order_9901:line_2_swap",
+        "effects": [
+          {
+            "effectId": "order_9901:line_2:order_total_delta",
+            "type": "retail:order_total_delta",
+            "value": { "type": "money", "amount": "-8.00", "currency": "USD" },
+            "guarantee": { "mode": "REVALIDATE" }
+          }
+        ]
+      }
+    ]
+  }
+}

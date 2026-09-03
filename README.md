@@ -1,7 +1,15 @@
 # Mutation Safety Envelope (MSE)
 
-**Status:** Experimental / External Review Candidate — v0.1.0
+**Status:** Experimental / External Review Candidate — v0.2.0
 **License:** Apache-2.0
+
+> **v0.2.0 is a breaking revision of v0.1.0**, made in direct response to
+> external technical falsification (UCP Discussion #799). See
+> [`/docs/v0.2-review-response.md`](docs/v0.2-review-response.md) for what
+> was falsified and what changed, and
+> [`/spec/normative-spec.md`](spec/normative-spec.md) §9 for the exact
+> compatibility break. This is evidence-driven revision, not a claim of
+> UCP adoption or endorsement.
 
 > MSE is **not** an official specification of UCP, ACP, Shopify, Salesforce,
 > IATA, Paid, Stripe, Paddle, Zuora, Chargebee, or any other vendor or
@@ -29,24 +37,25 @@ boundary without standardizing the underlying commerce domain.
 ```text
 Proposal
    ↓
-Quote
-   ├── predicted effects
-   ├── guarantee per effect        (EXACT | REVALIDATE | UNKNOWN)
-   ├── guarantee horizon
-   └── acceptance constraints
+Quote (one or more independently committing units)
+   └── per unit: predicted effects
+         ├── guarantee per effect   (EXACT | REVALIDATE | UNKNOWN)
+         ├── guarantee horizon
+         └── acceptance constraints
    ↓
-Commit
-   ├── APPLIED
-   ├── REFUSED
-   └── INDETERMINATE               (do not blindly retry)
+Commit  →  one result PER UNIT, not one for the whole mutation:
+   ├── unit A: APPLIED
+   ├── unit B: REFUSED
+   └── unit C: INDETERMINATE        (reconciliation contract — never blind retry)
    ↓
 Receipt
-   └── effect finality: FINAL | PENDING | FAILED | UNKNOWN
+   └── per committed effect, effect finality: FINAL | PENDING | FAILED | UNKNOWN
 ```
 
 MSE distinguishes three separate safety questions that a single `SUCCESS`
-flag collapses: **quote stability**, **commit determinacy**, and **effect
-finality**. See [`/spec/normative-spec.md`](spec/normative-spec.md) §2.
+flag collapses: **quote stability**, **commit determinacy** (now per
+independently committing unit, as of v0.2.0), and **effect finality**. See
+[`/spec/normative-spec.md`](spec/normative-spec.md) §2, §1a-§1c.
 
 ## Repository layout
 
@@ -65,8 +74,9 @@ finality**. See [`/spec/normative-spec.md`](spec/normative-spec.md) §2.
   ambiguities.md           Open ambiguities in the source design, surfaced deliberately
   security-considerations.md
   conformance.md
-  falsification-notes.md  What's been tested, what hasn't, what would falsify the hypothesis
-  readiness-report.md     Pre-publication readiness report (see below)
+  falsification-notes.md   What's been tested, what hasn't, what would falsify the hypothesis
+  readiness-report.md      Publication readiness report, v0.1.0 and v0.2.0 status
+  v0.2-review-response.md  What UCP Discussion #799 falsified in v0.1.0, and what changed
 ```
 
 ## What MSE does not define
@@ -98,24 +108,29 @@ different domains instantiate the same core without adding to it.
 
 ```bash
 npm install
-npm test              # runs behavioral + schema-conformance tests
-npm run validate-schema  # compiles the JSON Schema standalone
+npm test                # runs behavioral + schema-conformance tests (84 as of v0.2.0)
+npm run build            # tsc typecheck/build
+npm run validate-schema  # compiles the JSON Schema standalone under ajv strict mode
 ```
 
 ## Before you rely on this
 
-This is a v0.1.0 external-review candidate, not a finished or
+This is a v0.2.0 external-review candidate, not a finished or
 production-hardened specification. Start with:
 
 1. [`/docs/DISCLAIMER.md`](docs/DISCLAIMER.md) — what MSE is not.
-2. [`/docs/ambiguities.md`](docs/ambiguities.md) — known design questions;
-   four were resolved in a hardening pass (including monetary acceptance
-   constraints, now enforceable — see `/spec/normative-spec.md` §4a), one
-   (concurrent quotes against the same target) remains genuinely open.
-3. [`/docs/falsification-notes.md`](docs/falsification-notes.md) — what has
+2. [`/docs/v0.2-review-response.md`](docs/v0.2-review-response.md) — what
+   external review (UCP Discussion #799) falsified in v0.1.0's
+   mutation-wide commit outcome and undefined `INDETERMINATE` resolution
+   path, and what changed in response.
+3. [`/docs/ambiguities.md`](docs/ambiguities.md) — known design questions
+   across both revisions; three remain genuinely open (concurrent quotes,
+   per-unit consistency policy, cross-unit shared effects).
+4. [`/docs/falsification-notes.md`](docs/falsification-notes.md) — what has
    and has not actually been tested.
-4. [`/docs/readiness-report.md`](docs/readiness-report.md) — the
-   pre-publication readiness report prepared alongside this repository.
+5. [`/docs/readiness-report.md`](docs/readiness-report.md) — the
+   publication readiness report, covering both the v0.1.0 publication and
+   the current v0.2.0 revision's status.
 
 ## Review question
 

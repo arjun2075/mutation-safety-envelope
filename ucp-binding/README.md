@@ -23,9 +23,15 @@ Per the source handoff brief, the preferred posture for this repository is:
 2. Provide a UCP binding or experimental vendor capability/service sketch
    (this document).
 3. Ask UCP maintainers whether mutation safety belongs as a reusable UCP
-   primitive (not yet done — this repository has not been shared with UCP
-   maintainers as of v0.1.0. That outreach is a follow-up action, not
-   something this document can perform on its own).
+   primitive — this has now happened once: this repository was shared and
+   discussed in UCP Discussion #799, which raised substantive technical
+   criticism of the v0.1.0 core (see
+   [`/docs/v0.2-review-response.md`](../docs/v0.2-review-response.md)).
+   That the discussion occurred, and that its findings were addressed, is
+   **not** a claim that UCP maintainers have endorsed, adopted, or
+   co-authored MSE, or that mutation safety has been accepted as a UCP
+   primitive — see [`/docs/DISCLAIMER.md`](../docs/DISCLAIMER.md), which
+   still fully applies. Further outreach and discussion remain open.
 4. Do not distort MSE merely to fit UCP (see below — this sketch is
    intentionally marked incomplete where a forced fit would require
    compromising the core).
@@ -49,8 +55,15 @@ Operations:
 A UCP-integrated provider that supports this capability would advertise it
 alongside its existing commerce capabilities, and an agent negotiating with
 that provider would use the existing UCP transport/session/identity layer
-to carry `MutationProposal`/`MutationQuote`/`CommitRequest` payloads,
-validated against `/schema/mse-core.schema.json`.
+to carry `MutationProposal`/`MutationQuote`/`CommitRequest`/`CommitResult`
+payloads, validated against `/schema/mse-core.schema.json`. As of v0.2.0,
+`mse.commit`'s result carries `unitResults` (one outcome per independently
+committing unit, not a single mutation-wide outcome — see
+`/spec/normative-spec.md` §1a-§1c) and an `INDETERMINATE` unit's
+`reconciliation` field would need its `MACHINE_RESOLVABLE`/
+`AUTHORITATIVE_READ` invocation path mapped onto whatever reconciliation
+or status-check operation UCP's own transport affords — see the next
+section for why this sketch does not attempt to guess at that mapping.
 
 ## What this sketch deliberately does not attempt
 
@@ -67,7 +80,14 @@ validated against `/schema/mse-core.schema.json`.
 
 ## Status of outreach
 
-As of v0.1.0, this sketch has not been submitted to or discussed with UCP
-maintainers. Publishing this repository is not the same act as making that
-ask — see [`/docs/readiness-report.md`](../docs/readiness-report.md) for
-this listed explicitly as a remaining step.
+This sketch and repository were discussed in UCP Discussion #799, which
+raised the two substantive findings addressed in v0.2.0 (see
+[`/docs/v0.2-review-response.md`](../docs/v0.2-review-response.md)). This
+is one round of outreach and discussion, not a completed or closed
+process, and not an endorsement — see
+[`/docs/DISCLAIMER.md`](../docs/DISCLAIMER.md). Whether UCP maintainers
+consider mutation safety a candidate reusable primitive remains an open
+question posed *to* them, not answered *for* them by this repository.
+Further outreach on the v0.2.0 shapes specifically (`CommittingUnit`,
+`UnitResult`, `Reconciliation`, `effectId`) has not yet occurred as of
+this revision.

@@ -3,7 +3,7 @@
     "quoteId": "quote_travel_abc123_1",
     "acceptanceConstraints": [
       {
-        "effectType": "travel:fare_delta",
+        "effectId": "abc123:seg_2:fare_delta",
         "operator": "<=",
         "value": { "type": "money", "amount": "150.00", "currency": "USD" }
       }

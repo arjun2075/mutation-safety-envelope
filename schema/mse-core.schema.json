@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mutation-safety-envelope.org/schema/v0.1.0/mse-core.schema.json",
+  "$id": "https://mutation-safety-envelope.org/schema/v0.2.0/mse-core.schema.json",
   "title": "Mutation Safety Envelope — Core Schema",
-  "description": "Normative, domain-blind schema for MSE v0.1.0. This schema defines the safety envelope only. Domain-specific vocabulary (SKUs, fares, plans, billing periods, etc.) MUST NOT be added here — it belongs in a profile that extends `Effect.type` namespaces and `value` payloads. See /spec/normative-spec.md.",
+  "description": "Normative, domain-blind schema for MSE v0.2.0. This schema defines the safety envelope only. Domain-specific vocabulary (SKUs, fares, plans, billing periods, etc.) MUST NOT be added here — it belongs in a profile that extends `Effect.type` namespaces and `value` payloads. See /spec/normative-spec.md. v0.2.0 is a breaking revision of v0.1.0's mutation-wide CommitOutcome model, made in direct response to external falsification recorded in /docs/v0.2-review-response.md — see that document and /spec/normative-spec.md §9 before assuming v0.1.0 shapes still apply.",
   "$defs": {
     "GuaranteeMode": {
       "type": "string",
@@ -37,12 +37,17 @@
     "Effect": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "value", "guarantee"],
+      "required": ["effectId", "type", "value", "guarantee"],
       "properties": {
+        "effectId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque, domain-blind identifier for this specific effect instance, unique within the MutationQuote it appears in (across all units — see /spec/normative-spec.md §7a). Added in v0.2.0: because multiple independently committing units may legitimately produce effects sharing the same `type` (e.g. two units each producing a `retail:order_total_delta`), `type` alone is no longer sufficient to correlate an effect across MutationQuote -> CommitResult -> Receipt. All quote/commit/receipt correlation MUST use `effectId`, not `type`. A provider MUST assign effectId at quote time and MUST NOT reuse an effectId for a different effect within the same quote."
+        },
         "type": {
           "type": "string",
           "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$",
-          "description": "Namespaced, domain-defined effect identifier in the form `<namespace>:<local_name>`, e.g. `retail:order_total_delta`. The MSE core assigns no meaning to any namespace or local_name; it only requires the shape. Profiles own the registry of meaningful values within their namespace."
+          "description": "Namespaced, domain-defined effect identifier in the form `<namespace>:<local_name>`, e.g. `retail:order_total_delta`. The MSE core assigns no meaning to any namespace or local_name; it only requires the shape. Profiles own the registry of meaningful values within their namespace. Not required to be unique within a quote — see effectId."
         },
         "value": {
           "description": "Domain-defined payload for this effect. The core treats this as opaque. Profiles SHOULD constrain `value` to a specific, documented shape per effect type (e.g. a signed decimal amount + ISO 4217 currency code for a *_delta effect), but the core schema intentionally does not."
@@ -70,10 +75,29 @@
       }
     },
 
+    "CommittingUnit": {
+      "description": "Added in v0.2.0. A domain-blind representation of one independently committing unit within a MutationQuote. External review (UCP Discussion #799; see /docs/v0.2-review-response.md) established that a single mutation attempt may span several units that commit independently — e.g. one succeeds while another is refused or left indeterminate — and that v0.1.0's single mutation-wide CommitOutcome could not represent this without destroying information. The core assigns no domain meaning to what a unit is: it may correspond to a retail line, a travel leg, a subscription component, a contract clause, or anything else a profile/provider defines. The core only requires that the set of units be known no later than quote time, so a caller can check result coverage against a set it already saw before committing.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unitRef", "effects"],
+      "properties": {
+        "unitRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque, domain-blind, stable identifier for this committing unit, unique within the MutationQuote. A provider MUST NOT reuse a unitRef for a different unit within the same quote, and MUST use the same unitRef to refer to this unit in the corresponding CommitResult.unitResults entry."
+        },
+        "effects": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Effect" },
+          "description": "Predicted consequences of committing this specific unit. MAY be empty (a no-op or purely structural unit), but the array key MUST be present."
+        }
+      }
+    },
+
     "MutationQuote": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["quoteId", "target", "effects"],
+      "required": ["quoteId", "target", "units"],
       "properties": {
         "quoteId": {
           "type": "string",
@@ -86,10 +110,11 @@
         "snapshot": {
           "description": "Opaque, provider-defined precondition material representing the state of `target` at quote time (e.g. a version, ETag, content hash, or provider-internal token). The core assigns this value no shape or meaning and does not require it to be a universally comparable/updatable token — it is whatever the provider needs to detect drift by whatever mechanism the provider actually implements. A profile/adapter declaring `commitConsistency` other than NONE MUST document, in its own adapter documentation, what `snapshot` contains and how drift is actually detected (see /spec/normative-spec.md §6); the core does not and cannot verify this from the schema alone. Optional: not every provider can offer a snapshot reference."
         },
-        "effects": {
+        "units": {
           "type": "array",
-          "items": { "$ref": "#/$defs/Effect" },
-          "description": "Predicted consequences of committing this quote. MAY be empty (a no-op or purely structural change), but the array key MUST be present. Quoting MUST NOT commit the proposed commercial mutation itself (see /spec/normative-spec.md §3.1). A provider MAY create a temporary, reversible reservation or hold as a side effect of quoting (e.g. a short inventory hold), but only if that hold is itself disclosed here as an Effect (e.g. `travel:inventory_hold`) — an undisclosed hold is not permitted, per the same section."
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/CommittingUnit" },
+          "description": "Added in v0.2.0, replacing v0.1.0's top-level `effects` array. The complete set of independently committing units this quote proposes, known no later than quote time. A quote with only one unit is the degenerate (and still fully valid) single-unit case — v0.2.0 does not require multi-unit quotes, only that the shape can represent them. Every `unitRef` in this array MUST be unique within the quote (see /spec/normative-spec.md §1a); a quote with duplicate unitRefs is not conformant."
         },
         "expiresAt": {
           "type": "string",
@@ -173,12 +198,12 @@
     "AcceptanceConstraint": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["effectType", "operator", "value"],
+      "required": ["effectId", "operator", "value"],
       "properties": {
-        "effectType": {
+        "effectId": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$",
-          "description": "The Effect.type this constraint applies to."
+          "minLength": 1,
+          "description": "Changed in v0.2.0 (was `effectType`): the specific Effect.effectId this constraint applies to. Since multiple units may produce effects sharing the same `type`, a constraint naming only a `type` would be ambiguous about which unit's effect it bounds. A constraint MUST name one specific effect instance by its effectId."
         },
         "operator": { "$ref": "#/$defs/ComparisonOperator" },
         "value": {
@@ -197,7 +222,7 @@
         "idempotencyKey": {
           "type": "string",
           "minLength": 1,
-          "description": "Opaque key supplied by the caller to allow safe retry of a commit request whose outcome is INDETERMINATE. MSE does not define the retry protocol itself (see 'What MSE does not define'); this field only reserves a place for one to be carried."
+          "description": "Opaque key supplied by the caller to allow safe retry of a commit request whose outcome is INDETERMINATE. MSE does not define the retry protocol itself (see 'What MSE does not define'); this field only reserves a place for one to be carried. As of v0.2.0, prefer per-unit UnitResult.reconciliation for actually resolving an INDETERMINATE unit — idempotencyKey remains useful as the correlation key a reconciliation path may reference, but reconciliation, not blind resubmission, is the normative resolution mechanism (see /spec/normative-spec.md §4a)."
         },
         "acceptanceConstraints": {
           "type": "array",
@@ -207,14 +232,15 @@
       }
     },
 
-    "CommitOutcome": {
+    "UnitOutcome": {
       "type": "string",
-      "enum": ["APPLIED", "REFUSED", "INDETERMINATE"]
+      "enum": ["APPLIED", "REFUSED", "INDETERMINATE"],
+      "description": "Renamed from CommitOutcome in v0.2.0 and now scoped to a single CommittingUnit rather than to the whole mutation attempt. See UnitResult and /spec/normative-spec.md §1a-§1c."
     },
 
     "RefusalReason": {
       "type": "string",
-      "description": "A small standard vocabulary of core reasons, plus an open, namespaced extension mechanism for provider- or profile-specific reasons that do not fit the standard set. A conformant value is EITHER one of the five standard reasons below, OR a namespaced string in the form `<namespace>:<local_reason>` using the same namespacing convention as Effect.type (e.g. `travel:fare_class_closed`, `stripe:card_declined`). Providers SHOULD prefer a standard reason when one genuinely applies, and MUST use a namespaced extension rather than overloading PROVIDER_REJECTED when a more specific reason is available, so callers are not forced to lose information the provider actually has. See /spec/normative-spec.md §5 (formerly listed as an open ambiguity; resolved in v0.1.0 by this extension mechanism).",
+      "description": "A small standard vocabulary of core reasons, plus an open, namespaced extension mechanism for provider- or profile-specific reasons that do not fit the standard set. A conformant value is EITHER one of the five standard reasons below, OR a namespaced string in the form `<namespace>:<local_reason>` using the same namespacing convention as Effect.type (e.g. `travel:fare_class_closed`, `stripe:card_declined`). Providers SHOULD prefer a standard reason when one genuinely applies, and MUST use a namespaced extension rather than overloading PROVIDER_REJECTED when a more specific reason is available, so callers are not forced to lose information the provider actually has. See /spec/normative-spec.md §5.",
       "oneOf": [
         {
           "enum": [
@@ -232,18 +258,75 @@
       ]
     },
 
-    "CommitResult": {
+    "ReconciliationMode": {
+      "type": "string",
+      "enum": ["MACHINE_RESOLVABLE", "AUTHORITATIVE_READ", "NONE"],
+      "description": "Added in v0.2.0. Classifies what kind of path, if any, exists to resolve an INDETERMINATE UnitResult. MACHINE_RESOLVABLE: a binding/profile-defined operation exists that a caller (or its agent) can invoke programmatically to learn the actual outcome — e.g. the reference implementation's reconciliation-by-idempotency-key. AUTHORITATIVE_READ: no dedicated reconciliation operation exists, but a binding can define an authoritative read/status path (e.g. re-fetching the target resource) whose result resolves the mutation's true outcome. NONE: no machine-resolvable path is available at all; the caller has no programmatic way to resolve the uncertainty and MUST fall back to non-MSE means (manual investigation, support escalation, etc.). A provider MUST NOT report MACHINE_RESOLVABLE or AUTHORITATIVE_READ unless a real path actually exists — pretending an unavailable recovery path is actionable is a conformance violation (see /spec/normative-spec.md §4b)."
+    },
+
+    "Reconciliation": {
+      "description": "Added in v0.2.0. Carried on an INDETERMINATE UnitResult. Provides enough structured information for a binding/profile to tell the caller what safe operation comes next, without MSE itself defining a transport or retry protocol (see /spec/normative-spec.md §4b for the full normative requirements a binding exposing MACHINE_RESOLVABLE or AUTHORITATIVE_READ must satisfy).",
       "type": "object",
       "additionalProperties": false,
-      "required": ["quoteId", "outcome"],
+      "required": ["mode"],
       "properties": {
-        "quoteId": { "type": "string", "minLength": 1 },
-        "outcome": { "$ref": "#/$defs/CommitOutcome" },
-        "refusalReason": { "$ref": "#/$defs/RefusalReason" },
+        "mode": { "$ref": "#/$defs/ReconciliationMode" },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque key correlating a future reconciliation/read attempt back to this specific indeterminate attempt (and, transitively, to the unitRef it resolves — see /spec/normative-spec.md §4b). Required when mode is MACHINE_RESOLVABLE or AUTHORITATIVE_READ; MUST be absent when mode is NONE, since there is nothing to correlate a nonexistent path against."
+        },
+        "reference": {
+          "description": "Opaque, binding-defined pointer describing how to actually invoke the reconciliation or authoritative-read path (e.g. an operation name, a resource locator, a polling descriptor). The core does not interpret this value; a binding exposing MACHINE_RESOLVABLE or AUTHORITATIVE_READ MUST document what it contains and how to use it. MAY be absent even when mode is not NONE, if the binding's documentation alone (rather than a per-response value) is sufficient to invoke the path."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "mode": { "const": "NONE" } },
+            "required": ["mode"]
+          },
+          "then": {
+            "properties": { "correlationId": { "not": {} } }
+          }
+        },
+        {
+          "if": {
+            "properties": { "mode": { "enum": ["MACHINE_RESOLVABLE", "AUTHORITATIVE_READ"] } },
+            "required": ["mode"]
+          },
+          "then": {
+            "properties": { "correlationId": { "type": "string", "minLength": 1 } },
+            "required": ["correlationId"]
+          }
+        }
+      ]
+    },
+
+    "UnitResult": {
+      "description": "Added in v0.2.0, replacing v0.1.0's mutation-wide outcome/refusalReason/committedEffects on CommitResult. One UnitResult per CommittingUnit in the originating quote — see /spec/normative-spec.md §1b for the complete-coverage requirement this implies.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unitRef", "outcome"],
+      "properties": {
+        "unitRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "MUST match the unitRef of exactly one CommittingUnit in the quote referenced by this CommitResult."
+        },
+        "outcome": { "$ref": "#/$defs/UnitOutcome" },
+        "refusalReason": {
+          "$ref": "#/$defs/RefusalReason",
+          "description": "Required when outcome is REFUSED for this unit."
+        },
         "committedEffects": {
           "type": "array",
           "items": { "$ref": "#/$defs/Effect" },
-          "description": "Present when outcome=APPLIED. The effects as actually realized at commit time, which MAY differ from the quoted effects only for effects whose guarantee.mode was REVALIDATE or UNKNOWN. A conformant provider MUST NOT silently alter an EXACT-guaranteed effect between quote and commit; doing so is a conformance violation, not a valid APPLIED result (see spec)."
+          "description": "Present when this unit's outcome is APPLIED. The effects as actually realized at commit time for this unit, which MAY differ from the quoted effects only for effects whose guarantee.mode was REVALIDATE or UNKNOWN. A conformant provider MUST NOT silently alter an EXACT-guaranteed effect between quote and commit; doing so is a conformance violation, not a valid APPLIED result (see spec). MUST be absent when outcome is REFUSED or INDETERMINATE for this unit — an INDETERMINATE unit in particular MUST NOT claim committedEffects, because the provider does not know whether they occurred (see /spec/normative-spec.md §6a)."
+        },
+        "reconciliation": {
+          "$ref": "#/$defs/Reconciliation",
+          "description": "Required when outcome is INDETERMINATE for this unit. MUST be absent otherwise."
         }
       },
       "allOf": [
@@ -256,8 +339,52 @@
             "properties": { "refusalReason": { "$ref": "#/$defs/RefusalReason" } },
             "required": ["refusalReason"]
           }
+        },
+        {
+          "if": {
+            "properties": { "outcome": { "const": "INDETERMINATE" } },
+            "required": ["outcome"]
+          },
+          "then": {
+            "properties": {
+              "reconciliation": { "$ref": "#/$defs/Reconciliation" },
+              "committedEffects": { "not": {} }
+            },
+            "required": ["reconciliation"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "outcome": { "const": "REFUSED" } },
+            "required": ["outcome"]
+          },
+          "then": {
+            "properties": { "committedEffects": { "not": {} } }
+          }
         }
       ]
+    },
+
+    "AggregateHint": {
+      "type": "string",
+      "enum": ["ALL_APPLIED", "ALL_REFUSED", "ALL_INDETERMINATE", "MIXED"],
+      "description": "Added in v0.2.0. A non-authoritative, derived-only summary of CommitResult.unitResults, provided purely as a convenience for callers that want a fast path for the common single-unit or uniform-outcome case. THIS FIELD IS NOT AUTHORITATIVE. A caller MUST NOT treat aggregateHint as a substitute for inspecting unitResults, and MUST NOT collapse a MIXED result into any single APPLIED/REFUSED/INDETERMINATE decision. A conformant implementation computing this field MUST derive it purely from unitResults (ALL_APPLIED iff every unitResults[].outcome is APPLIED, ALL_REFUSED iff every one is REFUSED, ALL_INDETERMINATE iff every one is INDETERMINATE, MIXED otherwise) and MUST NOT allow it to disagree with unitResults."
+    },
+
+    "CommitResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quoteId", "unitResults"],
+      "properties": {
+        "quoteId": { "type": "string", "minLength": 1 },
+        "unitResults": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/UnitResult" },
+          "description": "Changed in v0.2.0 (replaces the v0.1.0 mutation-wide `outcome`/`refusalReason`/`committedEffects` fields entirely — this is a breaking change, see /spec/normative-spec.md §9). MUST contain exactly one UnitResult per CommittingUnit present in the quote referenced by quoteId — a unit MUST NOT be silently omitted, and a UnitResult MUST NOT reference a unitRef absent from that quote. This is the complete-coverage requirement; see /spec/normative-spec.md §1b."
+        },
+        "aggregateHint": { "$ref": "#/$defs/AggregateHint" }
+      }
     },
 
     "EffectFinalityState": {
@@ -268,11 +395,17 @@
     "EffectReceipt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["effectType", "finality"],
+      "required": ["effectId", "unitRef", "finality"],
       "properties": {
-        "effectType": {
+        "effectId": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$"
+          "minLength": 1,
+          "description": "Changed in v0.2.0 (was `effectType`). Correlates this receipt entry to a specific Effect.effectId in committedEffects, not merely to a type — required because multiple units' committed effects may share the same `type` (see /spec/normative-spec.md §7a)."
+        },
+        "unitRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Added in v0.2.0. The CommittingUnit this effect was committed under. Redundant with information derivable by cross-referencing effectId against the CommitResult, but included directly so a receipt is self-describing without requiring the reader to still hold the CommitResult."
         },
         "finality": { "$ref": "#/$defs/EffectFinalityState" },
         "value": {
@@ -289,14 +422,13 @@
     "Receipt": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["quoteId", "mutationOutcome", "effectReceipts"],
+      "required": ["quoteId", "effectReceipts"],
       "properties": {
         "quoteId": { "type": "string", "minLength": 1 },
-        "mutationOutcome": { "$ref": "#/$defs/CommitOutcome" },
         "effectReceipts": {
           "type": "array",
           "items": { "$ref": "#/$defs/EffectReceipt" },
-          "description": "Finality state for each effect from the committed quote. Normative rule (resolved in v0.1.0; see /spec/normative-spec.md §7): a provider MUST include exactly one EffectReceipt for every effect present in committedEffects — an effect MUST NOT silently disappear from the receipt. An effect that is not independently trackable MUST still appear, with finality UNKNOWN, rather than being omitted. Omission of a committed effect from effectReceipts is a conformance violation, not a valid receipt."
+          "description": "Changed in v0.2.0 (the v0.1.0 mutation-wide `mutationOutcome` field is removed from Receipt entirely — commit-unit determinacy is now fully carried by the corresponding CommitResult.unitResults, and must not be re-collapsed here; see /spec/normative-spec.md §6a). Fail-clear rule unchanged in spirit from v0.1.0, now scoped per unit: a provider MUST include exactly one EffectReceipt for every effect present in every APPLIED unit's committedEffects — an effect MUST NOT silently disappear from the receipt. An effect that is not independently trackable MUST still appear, with finality UNKNOWN, rather than being omitted. A REFUSED or INDETERMINATE unit contributes no entries here, since it has no committedEffects to report on (see /spec/normative-spec.md §6a)."
         }
       }
     }

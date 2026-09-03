@@ -13,8 +13,12 @@
   schema and spec**, not to any third-party or vendor specification.
 - Nothing in this repository, including the `ucp-binding/` sketch, should
   be read as a statement about what UCP does or will support. It is a
-  proposal for UCP maintainers to evaluate, reject, or ignore.
-- This is a **v0.1.0 external-review candidate**. It has not undergone
+  proposal for UCP maintainers to evaluate, reject, or ignore. That this
+  repository was discussed in UCP Discussion #799, and that the technical
+  criticism raised there was addressed in v0.2.0 (see
+  [`/docs/v0.2-review-response.md`](./v0.2-review-response.md)), is
+  likewise **not** a statement of UCP endorsement or adoption.
+- This is a **v0.2.0 external-review candidate**. It has not undergone
   external security review, formal verification, or production use. Do not
   deploy it to handle real commercial mutations without your own
   independent risk assessment.

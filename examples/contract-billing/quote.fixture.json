@@ -4,11 +4,17 @@
     "target": { "contractId": "ctr_2201" },
     "snapshot": "sha256:9f2b1c4d5e6f7089abc0123456789def0123456789abcdef0123456789abcde",
     "commitConsistency": "SNAPSHOT_REQUIRED",
-    "effects": [
+    "units": [
       {
-        "type": "contract:credit_amount",
-        "value": { "type": "money", "amount": "500.00", "currency": "USD" },
-        "guarantee": { "mode": "EXACT" }
+        "unitRef": "ctr_2201:credit_amendment",
+        "effects": [
+          {
+            "effectId": "ctr_2201:credit_amendment:credit_amount",
+            "type": "contract:credit_amount",
+            "value": { "type": "money", "amount": "500.00", "currency": "USD" },
+            "guarantee": { "mode": "EXACT" }
+          }
+        ]
       }
     ]
   }

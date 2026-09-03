@@ -1,6 +1,6 @@
 # Security considerations
 
-**Status:** v0.1.0, external review candidate. This is a first pass, not an
+**Status:** v0.2.0, external review candidate. This is a first pass, not an
 exhaustive threat model. Reviewers are explicitly invited to falsify or
 extend it — see [`/docs/falsification-notes.md`](./falsification-notes.md).
 
@@ -28,18 +28,59 @@ entirely, rather than misreporting its value, could otherwise bypass a
 constraint simply by not mentioning the effect it would violate. Any
 implementation that treats "constraint references an effect not present in
 the quote" as vacuously satisfied is not conformant and reintroduces this
-bypass.
+bypass. As of v0.2.0, this applies to `effectId` lookups across every
+unit in the quote (§7a) — a provider MUST search all units' effects, not
+just one, before concluding an `effectId` has no match.
 
 ## 3. `INDETERMINATE` exists to prevent unsafe automatic retries
 
-A caller that maps `INDETERMINATE` to `REFUSED` and retries automatically
-can cause a duplicate real-world mutation (double charge, double booking).
-A caller that maps `INDETERMINATE` to `APPLIED` and does nothing can leave
-a legitimate mutation un-retried. Neither collapse is safe. Implementations
-MUST surface `INDETERMINATE` distinctly and MUST NOT auto-retry a commit
-carrying the same effects without an explicit, separately-designed
-idempotency mechanism (see `CommitRequest.idempotencyKey`, which MSE
-reserves but does not itself define the semantics of).
+A caller that maps a unit's `INDETERMINATE` outcome to `REFUSED` and
+retries that unit automatically can cause a duplicate real-world mutation
+(double charge, double booking) for that unit specifically. A caller that
+maps it to `APPLIED` and does nothing can leave a legitimate mutation
+un-retried. Neither collapse is safe. Implementations MUST surface each
+unit's `INDETERMINATE` outcome distinctly and MUST NOT auto-retry that
+unit's commit without an explicit, separately-designed idempotency
+mechanism (see `CommitRequest.idempotencyKey`, which MSE reserves but does
+not itself define the semantics of). This is unchanged in substance by
+v0.2.0's per-unit revision — the hazard now applies per unit rather than
+to the whole mutation attempt, since other units in the same
+`CommitResult` may already be cleanly `APPLIED` or `REFUSED`.
+
+## 3a. Reconciliation is a new trust boundary, not a free pass
+
+v0.2.0 adds a normative `Reconciliation` contract (see
+`/spec/normative-spec.md` §4b-§4c) so a caller has a defined path to
+resolve an `INDETERMINATE` unit. This introduces its own hazards that did
+not exist in v0.1.0's schema (though they existed informally in any real
+`INDETERMINATE` implementation):
+
+- **A provider that claims `MACHINE_RESOLVABLE` or `AUTHORITATIVE_READ`
+  without a real, working path is worse than one that honestly reports
+  `NONE`.** A caller that trusts a `mode` it was told is actionable, and
+  is not, may wait indefinitely on a reconciliation attempt that can never
+  resolve, or may misinterpret a failed reconciliation *call* (e.g. a 404
+  on a nonexistent endpoint) as a resolved `REFUSED` outcome for the
+  underlying mutation. Implementations and reviewers should treat an
+  unverified `mode` claim with the same skepticism as an unverified
+  `EXACT` guarantee (§1) — both are promises a provider could make
+  dishonestly or carelessly.
+- **A reconciliation path that is secretly a replay is a bypass of the
+  no-blind-retry guarantee it exists to provide.** §4c is explicit that
+  reconciliation MUST be a read/status-resolution operation, never a
+  resubmission of the mutation — but the schema cannot enforce this by
+  itself; nothing in `Reconciliation`'s shape distinguishes a genuine
+  status check from a binding that internally just calls `commit()` again
+  under a different name. This is a documentation and conformance-review
+  obligation (per §4b's four-point list a binding must satisfy), not
+  something `schema/mse-core.schema.json` can verify mechanically.
+- **`correlationId` values should be treated as sensitive.** A
+  `correlationId` correlates back to a specific attempted mutation on a
+  specific resource; depending on the binding, it may be usable to probe
+  the state of that mutation. Implementations SHOULD treat it with
+  similar handling care as a session or idempotency token, not log it in
+  plaintext where a lower-trust reader could use it to query reconciliation
+  state on someone else's behalf.
 
 ## 4. Snapshot/drift detection is only as strong as universal snapshot updates
 
