@@ -53,7 +53,7 @@ describe("domain example fixtures conform to the core schema", () => {
   }
 });
 
-describe("v0.2.0 negative cases — the schema must reject these (spec §1b, §4b)", () => {
+describe("v0.2.0 negative cases retained in v0.3.0 (spec §1b, §4b)", () => {
   it("(F) rejects an INDETERMINATE unitResult with no reconciliation at all", () => {
     const doc = {
       commitResult: {
@@ -128,6 +128,46 @@ describe("v0.2.0 negative cases — the schema must reject these (spec §1b, §4
       },
     };
     expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects incomplete or outcome-contradictory UnitResult fields", () => {
+    const doc = {
+      commitResult: {
+        quoteId: "q1",
+        unitResults: [{ unitRef: "unit_a", outcome: "APPLIED" }],
+      },
+    };
+    expect(validate(doc)).toBe(false);
+
+    const contradictory = [
+      {
+        unitRef: "unit_a",
+        outcome: "APPLIED",
+        committedEffects: [],
+        refusalReason: "PROVIDER_REJECTED",
+      },
+      {
+        unitRef: "unit_a",
+        outcome: "APPLIED",
+        committedEffects: [],
+        reconciliation: { mode: "NONE" },
+      },
+      {
+        unitRef: "unit_a",
+        outcome: "REFUSED",
+        refusalReason: "PROVIDER_REJECTED",
+        reconciliation: { mode: "NONE" },
+      },
+      {
+        unitRef: "unit_a",
+        outcome: "INDETERMINATE",
+        refusalReason: "PROVIDER_REJECTED",
+        reconciliation: { mode: "NONE" },
+      },
+    ];
+    for (const unitResult of contradictory) {
+      expect(validate({ commitResult: { quoteId: "q1", unitResults: [unitResult] } })).toBe(false);
+    }
   });
 
   it("rejects a CommitResult with an empty unitResults array (minItems: 1)", () => {
@@ -209,5 +249,134 @@ describe("v0.2.0 negative cases — the schema must reject these (spec §1b, §4
       },
     };
     expect(validate(doc)).toBe(true);
+  });
+});
+
+describe("v0.3.0 admission-message negative cases", () => {
+  const baseRefusal = {
+    kind: "ADMISSION_REFUSED",
+    admissionRefusal: {
+      quoteId: "q1",
+      proposalId: "p1",
+      evaluatedAt: "2026-09-05T16:00:00Z",
+      failures: [
+        {
+          relationId: "retail:requires_companion",
+          witness: {
+            disposition: "COMPLETE",
+            requiredTransitions: [
+              {
+                unitLocator: { scopeRef: "retail:order_1", unitKey: "unit_b" },
+                transition: { operation: "CANCEL" },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  };
+
+  it("accepts a well-formed ADMISSION_REFUSED CommitResponse", () => {
+    expect(validate({ commitResponse: baseRefusal })).toBe(true);
+  });
+
+  it("rejects an admission failure with no witness", () => {
+    const doc = structuredClone(baseRefusal);
+    delete (doc.admissionRefusal.failures[0] as { witness?: unknown }).witness;
+    expect(validate({ commitResponse: doc })).toBe(false);
+  });
+
+  it.each(["COMPLETE", "PARTIAL"])(
+    "rejects %s repair with an empty requiredTransitions list",
+    (disposition) => {
+      const doc = structuredClone(baseRefusal);
+      doc.admissionRefusal.failures[0].witness = {
+        disposition,
+        requiredTransitions: [],
+      };
+      expect(validate({ commitResponse: doc })).toBe(false);
+    }
+  );
+
+  it("rejects UNAVAILABLE repair that carries a transition list", () => {
+    const doc = structuredClone(baseRefusal);
+    doc.admissionRefusal.failures[0].witness = {
+      disposition: "UNAVAILABLE",
+      requiredTransitions: baseRefusal.admissionRefusal.failures[0].witness.requiredTransitions,
+    };
+    expect(validate({ commitResponse: doc })).toBe(false);
+  });
+
+  it("rejects a refusal with no failed relations", () => {
+    const doc = structuredClone(baseRefusal);
+    doc.admissionRefusal.failures = [];
+    expect(validate({ commitResponse: doc })).toBe(false);
+  });
+
+  it("rejects a CommitResponse carrying both result variants", () => {
+    const doc = {
+      ...baseRefusal,
+      commitResult: {
+        quoteId: "q1",
+        unitResults: [{ unitRef: "u1", outcome: "REFUSED", refusalReason: "PROVIDER_REJECTED" }],
+      },
+    };
+    expect(validate({ commitResponse: doc })).toBe(false);
+  });
+
+  it("rejects a v0.3.0 quote unit missing unitLocator or transition", () => {
+    const doc = {
+      quote: {
+        quoteId: "q1",
+        target: {},
+        units: [{ unitRef: "u1", effects: [] }],
+        admissionRelations: [],
+      },
+    };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects a v0.3.0 quote that omits admissionRelations", () => {
+    const doc = {
+      quote: {
+        quoteId: "q1",
+        target: {},
+        units: [
+          {
+            unitRef: "u1",
+            unitLocator: { scopeRef: "scope", unitKey: "unit" },
+            transition: {},
+            effects: [],
+          },
+        ],
+      },
+    };
+    expect(validate(doc)).toBe(false);
+  });
+
+  it("rejects a relation with duplicate triggerUnitRefs at schema level", () => {
+    const doc = {
+      quote: {
+        quoteId: "q1",
+        target: {},
+        units: [
+          {
+            unitRef: "u1",
+            unitLocator: { scopeRef: "scope", unitKey: "unit" },
+            transition: {},
+            effects: [],
+          },
+        ],
+        admissionRelations: [
+          {
+            relationId: "relation",
+            type: "REQUIRES_COINCLUSION",
+            triggerUnitRefs: ["u1", "u1"],
+            scopeRef: "scope",
+          },
+        ],
+      },
+    };
+    expect(validate(doc)).toBe(false);
   });
 });

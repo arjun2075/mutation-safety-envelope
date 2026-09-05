@@ -1,21 +1,22 @@
-# Ambiguities in the source handoff brief and v0.1.0/v0.2.0 design
+# Ambiguities in the source handoff brief and v0.1.0-v0.3.0 design
 
 This document exists because the task that produced this repository
 required surfacing ambiguity *before* publication, not resolving it
 silently. Each item below states the ambiguity, what was originally
 chosen, and what was resolved and how, or why it remains open — across
-both the v0.1.0 hardening pass and the v0.2.0 review-hardening revision.
+the v0.1.0 hardening pass and the v0.2.0/v0.3.0 review revisions.
 
-**Status as of v0.2.0:** All 5 originally-flagged v0.1.0 ambiguities are
+**Status as of v0.3.0:** All 5 originally-flagged v0.1.0 ambiguities are
 resolved at the schema/spec level (§1-§5 below). External review (UCP
 Discussion #799) additionally falsified two v0.1.0 design assumptions
 (mutation-wide commit outcome; no INDETERMINATE resolution contract),
 addressed in v0.2.0 — see
 [`/docs/v0.2-review-response.md`](./v0.2-review-response.md) for the full
-account, and §6-§8 below for the ambiguities that revision itself
-surfaced. Three ambiguities remain genuinely open: concurrent quotes (§5,
-carried from v0.1.0), per-unit consistency policy (§7), and cross-unit
-shared effects (§8).
+account. Later feedback separated cross-unit admission dependencies from
+independent commit outcomes; §9 records the v0.3.0 resolution. Concurrent
+quotes (§5), per-unit consistency policy (§7), genuinely shared effects
+(§8), relation vocabulary breadth, and distributed admission/dispatch
+concurrency remain open (see normative spec §8).
 
 ---
 
@@ -202,3 +203,25 @@ effect as two. Resolving this without a concrete example of a real
 provider actually needing to represent a cross-unit effect risks guessing
 wrong in a way that would be expensive to walk back. See
 `/spec/normative-spec.md` §7a and §8 for the normative discussion.
+
+---
+
+## 9. Independently committing did not mean independently admissible — **RESOLVED narrowly in v0.3.0**
+
+**Ambiguity/falsification:** v0.2.0 fixed per-unit commit outcomes but had no
+way to declare that one submitted unit transition depended on co-inclusion of
+other transitions before any unit could be dispatched. `CommitRequest`
+referenced only a fixed quote and could not carry an amendment.
+
+**Resolution:** v0.3.0 adds a stable, directional
+`REQUIRES_COINCLUSION` relation to `MutationQuote`, explicit opaque
+transitions and binding-scoped unit locators on quoted units, and a distinct
+pre-dispatch `AdmissionRefusal` with honest witness dispositions. A complete
+witness constructs a new proposal and therefore a new quote. It never amends
+the old quote, grants authorization, or changes per-unit commit outcomes.
+
+This resolves only the two reported delivery gates modeled in the retail
+binding. It does not resolve §8's genuinely shared-effect ownership problem,
+define a generic constraint language, make co-included units atomic, or prove
+that a distributed provider can close the check-to-dispatch gap without a
+binding-specific transaction/revalidation mechanism.

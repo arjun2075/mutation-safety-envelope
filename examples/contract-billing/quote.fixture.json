@@ -7,6 +7,8 @@
     "units": [
       {
         "unitRef": "ctr_2201:credit_amendment",
+        "unitLocator": { "scopeRef": "contract:ctr_2201", "unitKey": "credit_amendment" },
+        "transition": { "operation": "APPLY_CREDIT", "amount": "500.00", "currency": "USD" },
         "effects": [
           {
             "effectId": "ctr_2201:credit_amendment:credit_amount",
@@ -16,6 +18,7 @@
           }
         ]
       }
-    ]
+    ],
+    "admissionRelations": []
   }
 }

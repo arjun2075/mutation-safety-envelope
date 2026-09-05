@@ -1,5 +1,5 @@
 /**
- * Mutation Safety Envelope (MSE) — core types, v0.2.0.
+ * Mutation Safety Envelope (MSE) — core types, v0.3.0.
  *
  * This file is a TypeScript mirror of /schema/mse-core.schema.json.
  * The JSON Schema is normative; this file exists for ergonomic use in
@@ -10,9 +10,9 @@
  * billing period, seat, refund rule, etc.). Domain vocabulary belongs in
  * /examples/<domain>, not here.
  *
- * v0.2.0 is a breaking revision of v0.1.0's mutation-wide CommitOutcome
- * model, in direct response to external falsification — see
- * /docs/v0.2-review-response.md and /spec/normative-spec.md.
+ * v0.3.0 adds a pre-dispatch admission boundary and is a breaking
+ * revision of v0.2.0 — see /docs/v0.3-design-decision.md and
+ * /docs/v0.3-review-response.md.
  */
 
 /** Confidence classification for a predicted effect. */
@@ -56,15 +56,45 @@ export interface MutationProposal {
 }
 
 /**
+ * A binding-scoped identity for a domain unit. Unlike CommittingUnit.unitRef,
+ * this locator may be reused to identify the same unit in a failure witness
+ * and in a newly quoted amended proposal. It has no meaning outside scopeRef.
+ */
+export interface UnitLocator {
+  scopeRef: string;
+  unitKey: string;
+}
+
+/**
  * Added in v0.2.0. A domain-blind representation of one independently
  * committing unit within a MutationQuote. The core assigns no meaning to
  * what a unit is — see /spec/normative-spec.md §1a.
  */
 export interface CommittingUnit {
-  /** Opaque, stable identifier for this unit, unique within the quote. */
+  /** Opaque identifier stable for this quote only; unique within the quote. */
   unitRef: string;
+  /** Binding-scoped identity used to map this unit across separate quotes. */
+  unitLocator: UnitLocator;
+  /** Opaque, binding-defined transition this unit will attempt to dispatch. */
+  transition: unknown;
   /** Predicted consequences of committing this specific unit. MAY be empty. */
   effects: Effect[];
+}
+
+/** A directional relation: quoted trigger units may require co-included transitions. */
+export type AdmissionRelationType = "REQUIRES_COINCLUSION";
+
+/**
+ * Stable declaration carried by a quote. Current missing transitions are not
+ * embedded here; they are evaluated against live state at admission time.
+ */
+export interface AdmissionRelation {
+  relationId: string;
+  type: AdmissionRelationType;
+  /** Quote-local unitRefs whose transitions trigger this directional relation. */
+  triggerUnitRefs: string[];
+  /** Binding-defined scope in which any required UnitLocator is resolved. */
+  scopeRef: string;
 }
 
 /** A non-mutating representation of the predicted consequences of a proposal. */
@@ -79,6 +109,8 @@ export interface MutationQuote {
    * quote time. MUST be non-empty; every unitRef MUST be unique.
    */
   units: CommittingUnit[];
+  /** Stable relation declarations; current witnesses are evaluated at admission. */
+  admissionRelations: AdmissionRelation[];
   /** ISO 8601 timestamp after which this quote must not be committed. */
   expiresAt?: string;
   commitConsistency?: CommitConsistency;
@@ -120,6 +152,50 @@ export interface CommitRequest {
    */
   idempotencyKey?: string;
   acceptanceConstraints: AcceptanceConstraint[];
+}
+
+/** A transition missing from the evaluated proposal, identified outside quote-local IDs. */
+export interface RequiredTransition {
+  unitLocator: UnitLocator;
+  transition: unknown;
+}
+
+/**
+ * COMPLETE alone claims a locally constructible amendment for one relation.
+ * PARTIAL is informative but insufficient; UNAVAILABLE carries no list;
+ * NOT_REPAIRABLE means adding transitions cannot repair the relation.
+ */
+export type RepairDisposition =
+  | "COMPLETE"
+  | "PARTIAL"
+  | "UNAVAILABLE"
+  | "NOT_REPAIRABLE";
+
+export type AdmissionWitness =
+  | {
+      disposition: "COMPLETE" | "PARTIAL";
+      requiredTransitions: RequiredTransition[];
+    }
+  | {
+      disposition: "UNAVAILABLE" | "NOT_REPAIRABLE";
+    };
+
+/** Failure of one quote-declared relation at the evaluated state. */
+export interface AdmissionFailure {
+  relationId: string;
+  witness: AdmissionWitness;
+}
+
+/** A known pre-dispatch refusal. No commercial mutation was dispatched. */
+export interface AdmissionRefusal {
+  quoteId: string;
+  proposalId: string;
+  /** ISO 8601 time at which the binding evaluated current dependency state. */
+  evaluatedAt: string;
+  /** Optional opaque binding state/version evidence. This is not a lock. */
+  stateRef?: unknown;
+  /** One or more failed relations. A witness applies only to its own relation. */
+  failures: AdmissionFailure[];
 }
 
 /**
@@ -173,22 +249,30 @@ export interface Reconciliation {
  * committedEffects on CommitResult. One UnitResult per CommittingUnit in
  * the originating quote.
  */
-export interface UnitResult {
-  /** MUST match the unitRef of exactly one CommittingUnit in the referenced quote. */
-  unitRef: string;
-  outcome: UnitOutcome;
-  /** Required when outcome is REFUSED for this unit. */
-  refusalReason?: RefusalReason;
-  /**
-   * Present when this unit's outcome is APPLIED. MUST be absent when
-   * outcome is REFUSED or INDETERMINATE — an INDETERMINATE unit in
-   * particular MUST NOT claim committedEffects, because the provider does
-   * not know whether they occurred.
-   */
-  committedEffects?: Effect[];
-  /** Required when outcome is INDETERMINATE for this unit; MUST be absent otherwise. */
-  reconciliation?: Reconciliation;
-}
+export type UnitResult =
+  | {
+      /** MUST match exactly one CommittingUnit in the referenced quote. */
+      unitRef: string;
+      outcome: "APPLIED";
+      /** Required even when empty, so committed-effect coverage is explicit. */
+      committedEffects: Effect[];
+      refusalReason?: never;
+      reconciliation?: never;
+    }
+  | {
+      unitRef: string;
+      outcome: "REFUSED";
+      refusalReason: RefusalReason;
+      committedEffects?: never;
+      reconciliation?: never;
+    }
+  | {
+      unitRef: string;
+      outcome: "INDETERMINATE";
+      reconciliation: Reconciliation;
+      refusalReason?: never;
+      committedEffects?: never;
+    };
 
 /**
  * Added in v0.2.0. A non-authoritative, derived-only summary of
@@ -211,6 +295,14 @@ export interface CommitResult {
   /** Non-authoritative derived summary; see AggregateHint. */
   aggregateHint?: AggregateHint;
 }
+
+/**
+ * v0.3.0 commit response. Admission refusal remains distinct from per-unit
+ * commit outcomes because a known refusal dispatches no commercial mutation.
+ */
+export type CommitResponse =
+  | { kind: "ADMISSION_REFUSED"; admissionRefusal: AdmissionRefusal }
+  | { kind: "COMMIT_RESULT"; commitResult: CommitResult };
 
 export type EffectFinalityState = "FINAL" | "PENDING" | "FAILED" | "UNKNOWN";
 

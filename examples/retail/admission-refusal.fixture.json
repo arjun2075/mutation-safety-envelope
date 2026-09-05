@@ -1,0 +1,64 @@
+{
+  "proposal": {
+    "proposalId": "proposal_cancel_delivery_1",
+    "target": { "orderId": "order_799" },
+    "change": {
+      "transitions": [
+        { "unitKey": "delivery", "operation": "CANCEL" }
+      ]
+    }
+  },
+  "quote": {
+    "quoteId": "quote_cancel_delivery_1",
+    "target": { "orderId": "order_799" },
+    "snapshot": { "orderVersion": 41 },
+    "commitConsistency": "SNAPSHOT_REQUIRED",
+    "units": [
+      {
+        "unitRef": "proposal_cancel_delivery_1:unit:1",
+        "unitLocator": { "scopeRef": "retail:order_799", "unitKey": "delivery" },
+        "transition": { "unitKey": "delivery", "operation": "CANCEL" },
+        "effects": []
+      }
+    ],
+    "admissionRelations": [
+      {
+        "relationId": "retail:delivery_cancel_requires_goods_cancel",
+        "type": "REQUIRES_COINCLUSION",
+        "triggerUnitRefs": ["proposal_cancel_delivery_1:unit:1"],
+        "scopeRef": "retail:order_799"
+      }
+    ]
+  },
+  "commitRequest": {
+    "quoteId": "quote_cancel_delivery_1",
+    "acceptanceConstraints": []
+  },
+  "commitResponse": {
+    "kind": "ADMISSION_REFUSED",
+    "admissionRefusal": {
+      "quoteId": "quote_cancel_delivery_1",
+      "proposalId": "proposal_cancel_delivery_1",
+      "evaluatedAt": "2026-09-05T16:00:00Z",
+      "stateRef": { "orderVersion": 41 },
+      "failures": [
+        {
+          "relationId": "retail:delivery_cancel_requires_goods_cancel",
+          "witness": {
+            "disposition": "COMPLETE",
+            "requiredTransitions": [
+              {
+                "unitLocator": { "scopeRef": "retail:order_799", "unitKey": "goods_1" },
+                "transition": { "unitKey": "goods_1", "operation": "CANCEL" }
+              },
+              {
+                "unitLocator": { "scopeRef": "retail:order_799", "unitKey": "goods_2" },
+                "transition": { "unitKey": "goods_2", "operation": "CANCEL" }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

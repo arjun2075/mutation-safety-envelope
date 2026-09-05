@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mutation-safety-envelope.org/schema/v0.2.0/mse-core.schema.json",
+  "$id": "https://mutation-safety-envelope.org/schema/v0.3.0/mse-core.schema.json",
   "title": "Mutation Safety Envelope — Core Schema",
-  "description": "Normative, domain-blind schema for MSE v0.2.0. This schema defines the safety envelope only. Domain-specific vocabulary (SKUs, fares, plans, billing periods, etc.) MUST NOT be added here — it belongs in a profile that extends `Effect.type` namespaces and `value` payloads. See /spec/normative-spec.md. v0.2.0 is a breaking revision of v0.1.0's mutation-wide CommitOutcome model, made in direct response to external falsification recorded in /docs/v0.2-review-response.md — see that document and /spec/normative-spec.md §9 before assuming v0.1.0 shapes still apply.",
+  "description": "Normative, domain-blind schema for MSE v0.3.0. This schema defines the safety envelope only. Domain-specific vocabulary (SKUs, fares, plans, billing periods, operations, and resource states) belongs in a binding/profile. v0.3.0 adds quote-declared admission relations, live failure witnesses, binding-scoped unit locators, explicit quoted transitions, and a discriminated CommitResponse. See /docs/v0.3-design-decision.md and /spec/normative-spec.md.",
   "$defs": {
     "GuaranteeMode": {
       "type": "string",
@@ -75,16 +75,41 @@
       }
     },
 
+    "UnitLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scopeRef", "unitKey"],
+      "properties": {
+        "scopeRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque binding-defined scope in which unitKey resolves. The tuple (scopeRef, unitKey) may identify the same domain unit across separate quotes, but has no global meaning."
+        },
+        "unitKey": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque binding-defined unit identity within scopeRef. This is deliberately distinct from quote-local CommittingUnit.unitRef."
+        }
+      }
+    },
+
     "CommittingUnit": {
       "description": "Added in v0.2.0. A domain-blind representation of one independently committing unit within a MutationQuote. External review (UCP Discussion #799; see /docs/v0.2-review-response.md) established that a single mutation attempt may span several units that commit independently — e.g. one succeeds while another is refused or left indeterminate — and that v0.1.0's single mutation-wide CommitOutcome could not represent this without destroying information. The core assigns no domain meaning to what a unit is: it may correspond to a retail line, a travel leg, a subscription component, a contract clause, or anything else a profile/provider defines. The core only requires that the set of units be known no later than quote time, so a caller can check result coverage against a set it already saw before committing.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["unitRef", "effects"],
+      "required": ["unitRef", "unitLocator", "transition", "effects"],
       "properties": {
         "unitRef": {
           "type": "string",
           "minLength": 1,
-          "description": "Opaque, domain-blind, stable identifier for this committing unit, unique within the MutationQuote. A provider MUST NOT reuse a unitRef for a different unit within the same quote, and MUST use the same unitRef to refer to this unit in the corresponding CommitResult.unitResults entry."
+          "description": "Opaque, domain-blind identifier stable for the lifetime of this quote and unique within the MutationQuote. It is quote-local, not a cross-quote identity. A provider MUST NOT reuse a unitRef for a different unit within the same quote, and MUST use the same unitRef to refer to this unit in the corresponding CommitResult.unitResults entry."
+        },
+        "unitLocator": {
+          "$ref": "#/$defs/UnitLocator",
+          "description": "Binding-scoped identity used to identify this domain unit in admission witnesses and across a newly quoted amended proposal. It does not make unitRef globally stable."
+        },
+        "transition": {
+          "description": "Opaque, binding-defined transition this unit will attempt to dispatch. The core preserves but never parses domain operations or states."
         },
         "effects": {
           "type": "array",
@@ -94,10 +119,42 @@
       }
     },
 
+    "AdmissionRelationType": {
+      "type": "string",
+      "enum": ["REQUIRES_COINCLUSION"],
+      "description": "Directional core relation: transitions for one or more quoted trigger units may require additional transitions from the declared binding scope to be co-included in an admissible proposal. The binding owns the operation/state semantics and live evaluation."
+    },
+
+    "AdmissionRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relationId", "type", "triggerUnitRefs", "scopeRef"],
+      "properties": {
+        "relationId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Identifier unique within this quote. A failure witness refers back to this declaration."
+        },
+        "type": { "$ref": "#/$defs/AdmissionRelationType" },
+        "triggerUnitRefs": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Quote-local unitRefs whose submitted transitions trigger this directional relation. Every value MUST resolve to a unit in the same quote."
+        },
+        "scopeRef": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque binding scope within which live required UnitLocators are resolved. This declaration is stable; a quote-time list of currently missing units does not belong here."
+        }
+      }
+    },
+
     "MutationQuote": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["quoteId", "target", "units"],
+      "required": ["quoteId", "target", "units", "admissionRelations"],
       "properties": {
         "quoteId": {
           "type": "string",
@@ -115,6 +172,11 @@
           "minItems": 1,
           "items": { "$ref": "#/$defs/CommittingUnit" },
           "description": "Added in v0.2.0, replacing v0.1.0's top-level `effects` array. The complete set of independently committing units this quote proposes, known no later than quote time. A quote with only one unit is the degenerate (and still fully valid) single-unit case — v0.2.0 does not require multi-unit quotes, only that the shape can represent them. Every `unitRef` in this array MUST be unique within the quote (see /spec/normative-spec.md §1a); a quote with duplicate unitRefs is not conformant."
+        },
+        "admissionRelations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AdmissionRelation" },
+          "description": "Stable, directional admission relations declared by this quote. MAY be empty. Live missing-transition witnesses are evaluated later and MUST NOT be frozen into this declaration."
         },
         "expiresAt": {
           "type": "string",
@@ -232,6 +294,89 @@
       }
     },
 
+    "RequiredTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unitLocator", "transition"],
+      "properties": {
+        "unitLocator": { "$ref": "#/$defs/UnitLocator" },
+        "transition": {
+          "description": "Opaque, binding-defined transition required to repair this relation at the evaluated state. The core does not interpret it."
+        }
+      }
+    },
+
+    "RepairDisposition": {
+      "type": "string",
+      "enum": ["COMPLETE", "PARTIAL", "UNAVAILABLE", "NOT_REPAIRABLE"],
+      "description": "COMPLETE: the non-empty requiredTransitions list is sufficient to construct an amendment for this one relation at the evaluated state. PARTIAL: the non-empty list is informative but insufficient. UNAVAILABLE: no trustworthy list is available. NOT_REPAIRABLE: adding transitions cannot repair this relation."
+    },
+
+    "AdmissionWitness": {
+      "description": "Explicit repair disposition for one failed relation. Empty or omitted evidence never means complete repair.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["disposition", "requiredTransitions"],
+          "properties": {
+            "disposition": { "enum": ["COMPLETE", "PARTIAL"] },
+            "requiredTransitions": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/RequiredTransition" }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["disposition"],
+          "properties": {
+            "disposition": { "enum": ["UNAVAILABLE", "NOT_REPAIRABLE"] }
+          }
+        }
+      ]
+    },
+
+    "AdmissionFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relationId", "witness"],
+      "properties": {
+        "relationId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "MUST name an AdmissionRelation declared by the evaluated quote."
+        },
+        "witness": { "$ref": "#/$defs/AdmissionWitness" }
+      }
+    },
+
+    "AdmissionRefusal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quoteId", "proposalId", "evaluatedAt", "failures"],
+      "properties": {
+        "quoteId": { "type": "string", "minLength": 1 },
+        "proposalId": { "type": "string", "minLength": 1 },
+        "evaluatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Time at which the binding evaluated current dependency state. This is evidence, not a lock or authorization."
+        },
+        "stateRef": {
+          "description": "Optional opaque binding-defined state/version evidence for the evaluation. It does not itself close the check-to-dispatch gap."
+        },
+        "failures": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/AdmissionFailure" },
+          "description": "Failed relations. Each witness applies only to its relation and never claims whole-request admissibility."
+        }
+      }
+    },
+
     "UnitOutcome": {
       "type": "string",
       "enum": ["APPLIED", "REFUSED", "INDETERMINATE"],
@@ -332,11 +477,31 @@
       "allOf": [
         {
           "if": {
+            "properties": { "outcome": { "const": "APPLIED" } },
+            "required": ["outcome"]
+          },
+          "then": {
+            "properties": {
+              "committedEffects": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/Effect" }
+              },
+              "refusalReason": { "not": {} },
+              "reconciliation": { "not": {} }
+            },
+            "required": ["committedEffects"]
+          }
+        },
+        {
+          "if": {
             "properties": { "outcome": { "const": "REFUSED" } },
             "required": ["outcome"]
           },
           "then": {
-            "properties": { "refusalReason": { "$ref": "#/$defs/RefusalReason" } },
+            "properties": {
+              "refusalReason": { "$ref": "#/$defs/RefusalReason" },
+              "reconciliation": { "not": {} }
+            },
             "required": ["refusalReason"]
           }
         },
@@ -348,7 +513,8 @@
           "then": {
             "properties": {
               "reconciliation": { "$ref": "#/$defs/Reconciliation" },
-              "committedEffects": { "not": {} }
+              "committedEffects": { "not": {} },
+              "refusalReason": { "not": {} }
             },
             "required": ["reconciliation"]
           }
@@ -385,6 +551,30 @@
         },
         "aggregateHint": { "$ref": "#/$defs/AggregateHint" }
       }
+    },
+
+    "CommitResponse": {
+      "description": "v0.3.0 outer response. A known pre-dispatch admission refusal is distinct from per-unit commit outcomes. If dispatch may have occurred, the COMMIT_RESULT branch and its INDETERMINATE/reconciliation semantics apply instead.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "admissionRefusal"],
+          "properties": {
+            "kind": { "const": "ADMISSION_REFUSED" },
+            "admissionRefusal": { "$ref": "#/$defs/AdmissionRefusal" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "commitResult"],
+          "properties": {
+            "kind": { "const": "COMMIT_RESULT" },
+            "commitResult": { "$ref": "#/$defs/CommitResult" }
+          }
+        }
+      ]
     },
 
     "EffectFinalityState": {
@@ -435,12 +625,13 @@
   },
 
   "type": "object",
-  "description": "This top-level schema is a container for the $defs above. MSE does not mandate a single wire envelope; implementations reference individual $defs (MutationProposal, MutationQuote, CommitRequest, CommitResult, Receipt) as needed for their transport.",
+  "description": "This top-level schema is a container for the $defs above. MSE does not mandate a single wire envelope; implementations reference individual $defs (MutationProposal, MutationQuote, CommitRequest, CommitResponse, CommitResult, AdmissionRefusal, Receipt) as needed for their transport.",
   "properties": {
     "proposal": { "$ref": "#/$defs/MutationProposal" },
     "quote": { "$ref": "#/$defs/MutationQuote" },
     "commitRequest": { "$ref": "#/$defs/CommitRequest" },
     "commitResult": { "$ref": "#/$defs/CommitResult" },
+    "commitResponse": { "$ref": "#/$defs/CommitResponse" },
     "receipt": { "$ref": "#/$defs/Receipt" }
   },
   "additionalProperties": false

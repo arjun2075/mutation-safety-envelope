@@ -1,5 +1,5 @@
 /**
- * Mutation Safety Envelope (MSE) — core validation helpers, v0.2.0.
+ * Mutation Safety Envelope (MSE) — core validation helpers, v0.3.0.
  *
  * These functions implement the parts of the normative spec that are
  * mechanically checkable without a real provider: quote well-formedness
@@ -17,11 +17,14 @@
 
 import type {
   AcceptanceConstraint,
+  AdmissionRefusal,
   ComparableValue,
   CommitResult,
   Effect,
   MutationQuote,
   Reconciliation,
+  MutationProposal,
+  UnitLocator,
   UnitResult,
 } from "./types";
 
@@ -248,6 +251,7 @@ export function isQuoteExpired(quote: MutationQuote, now: Date = new Date()): bo
 export function assertQuoteUnitsWellFormed(quote: MutationQuote): void {
   const seenUnitRefs = new Set<string>();
   const seenEffectIds = new Set<string>();
+  const seenUnitLocators = new Set<string>();
 
   for (const unit of quote.units) {
     if (seenUnitRefs.has(unit.unitRef)) {
@@ -258,6 +262,23 @@ export function assertQuoteUnitsWellFormed(quote: MutationQuote): void {
     }
     seenUnitRefs.add(unit.unitRef);
 
+    assertUnitLocatorWellFormed(unit.unitLocator, `unit "${unit.unitRef}"`);
+    const scopedKey = unitLocatorKey(unit.unitLocator);
+    if (seenUnitLocators.has(scopedKey)) {
+      throw new MseViolation(
+        `Duplicate unitLocator ${JSON.stringify(unit.unitLocator)} in quote "${quote.quoteId}". ` +
+          `A binding-scoped unit MUST appear at most once in a quoted transition set.`
+      );
+    }
+    seenUnitLocators.add(scopedKey);
+
+    if (!Object.prototype.hasOwnProperty.call(unit, "transition")) {
+      throw new MseViolation(
+        `CommittingUnit "${unit.unitRef}" in quote "${quote.quoteId}" has no transition. ` +
+          `Every v0.3.0 quoted unit MUST preserve the opaque transition it would dispatch.`
+      );
+    }
+
     for (const effect of unit.effects) {
       if (seenEffectIds.has(effect.effectId)) {
         throw new MseViolation(
@@ -267,6 +288,200 @@ export function assertQuoteUnitsWellFormed(quote: MutationQuote): void {
         );
       }
       seenEffectIds.add(effect.effectId);
+    }
+  }
+
+  if (!Array.isArray(quote.admissionRelations)) {
+    throw new MseViolation(
+      `Quote "${quote.quoteId}" has no admissionRelations array. v0.3.0 quotes MUST carry ` +
+        `the array even when no relations are declared.`
+    );
+  }
+
+  const seenRelationIds = new Set<string>();
+  for (const relation of quote.admissionRelations) {
+    if (!relation.relationId) {
+      throw new MseViolation(`Quote "${quote.quoteId}" contains an admission relation with no relationId.`);
+    }
+    if (seenRelationIds.has(relation.relationId)) {
+      throw new MseViolation(
+        `Duplicate admission relationId "${relation.relationId}" in quote "${quote.quoteId}".`
+      );
+    }
+    seenRelationIds.add(relation.relationId);
+
+    if (relation.type !== "REQUIRES_COINCLUSION") {
+      throw new MseViolation(
+        `Admission relation "${relation.relationId}" has unsupported type "${relation.type}".`
+      );
+    }
+    if (!relation.scopeRef) {
+      throw new MseViolation(`Admission relation "${relation.relationId}" has no scopeRef.`);
+    }
+    if (!Array.isArray(relation.triggerUnitRefs) || relation.triggerUnitRefs.length === 0) {
+      throw new MseViolation(
+        `Admission relation "${relation.relationId}" MUST name at least one triggerUnitRef.`
+      );
+    }
+
+    const seenTriggers = new Set<string>();
+    for (const triggerUnitRef of relation.triggerUnitRefs) {
+      if (seenTriggers.has(triggerUnitRef)) {
+        throw new MseViolation(
+          `Admission relation "${relation.relationId}" repeats triggerUnitRef "${triggerUnitRef}".`
+        );
+      }
+      seenTriggers.add(triggerUnitRef);
+      const trigger = quote.units.find((unit) => unit.unitRef === triggerUnitRef);
+      if (!trigger) {
+        throw new MseViolation(
+          `Admission relation "${relation.relationId}" references unknown triggerUnitRef ` +
+            `"${triggerUnitRef}" in quote "${quote.quoteId}".`
+        );
+      }
+      if (trigger.unitLocator.scopeRef !== relation.scopeRef) {
+        throw new MseViolation(
+          `Admission relation "${relation.relationId}" has scopeRef "${relation.scopeRef}", ` +
+            `but trigger unit "${triggerUnitRef}" belongs to scope ` +
+            `"${trigger.unitLocator.scopeRef}".`
+        );
+      }
+    }
+  }
+}
+
+function unitLocatorKey(locator: UnitLocator): string {
+  return `${locator.scopeRef.length}:${locator.scopeRef}${locator.unitKey.length}:${locator.unitKey}`;
+}
+
+function assertUnitLocatorWellFormed(locator: UnitLocator, context: string): void {
+  if (
+    typeof locator !== "object" ||
+    locator === null ||
+    typeof locator.scopeRef !== "string" ||
+    locator.scopeRef.length === 0 ||
+    typeof locator.unitKey !== "string" ||
+    locator.unitKey.length === 0
+  ) {
+    throw new MseViolation(`${context} has a malformed unitLocator.`);
+  }
+}
+
+/**
+ * Validates a pre-dispatch AdmissionRefusal against the quote and proposal it
+ * claims to describe. This rejects structurally impossible COMPLETE claims,
+ * wrong-scope repair references, duplicate/contradictory requirements,
+ * quote-local identity confusion, and failures for relations the quote never
+ * declared. Domain-level completeness remains a binding conformance promise;
+ * core validation cannot infer it from opaque state or transitions.
+ */
+export function assertAdmissionRefusalWellFormed(
+  quote: MutationQuote,
+  proposal: MutationProposal,
+  refusal: AdmissionRefusal
+): void {
+  if (refusal.quoteId !== quote.quoteId) {
+    throw new MseViolation(
+      `AdmissionRefusal quoteId "${refusal.quoteId}" does not match evaluated quote ` +
+        `"${quote.quoteId}".`
+    );
+  }
+  if (refusal.proposalId !== proposal.proposalId) {
+    throw new MseViolation(
+      `AdmissionRefusal proposalId "${refusal.proposalId}" does not match evaluated proposal ` +
+        `"${proposal.proposalId}".`
+    );
+  }
+  if (Number.isNaN(Date.parse(refusal.evaluatedAt))) {
+    throw new MseViolation(`AdmissionRefusal evaluatedAt MUST be an ISO 8601 timestamp.`);
+  }
+  if (!Array.isArray(refusal.failures) || refusal.failures.length === 0) {
+    throw new MseViolation(`AdmissionRefusal MUST contain at least one failed relation.`);
+  }
+
+  const relations = new Map(quote.admissionRelations.map((relation) => [relation.relationId, relation]));
+  const quotedLocators = new Set(quote.units.map((unit) => unitLocatorKey(unit.unitLocator)));
+  const seenFailures = new Set<string>();
+
+  for (const failure of refusal.failures) {
+    const relation = relations.get(failure.relationId);
+    if (!relation) {
+      throw new MseViolation(
+        `Admission failure references relationId "${failure.relationId}", which the evaluated ` +
+          `quote did not declare.`
+      );
+    }
+    if (seenFailures.has(failure.relationId)) {
+      throw new MseViolation(
+        `AdmissionRefusal repeats failure for relationId "${failure.relationId}".`
+      );
+    }
+    seenFailures.add(failure.relationId);
+
+    const witness = failure.witness;
+    if (!witness || typeof witness !== "object") {
+      throw new MseViolation(
+        `Admission failure "${failure.relationId}" has no explicit witness disposition.`
+      );
+    }
+
+    if (witness.disposition === "UNAVAILABLE" || witness.disposition === "NOT_REPAIRABLE") {
+      if (Object.prototype.hasOwnProperty.call(witness, "requiredTransitions")) {
+        throw new MseViolation(
+          `Admission failure "${failure.relationId}" has disposition ${witness.disposition} ` +
+            `but also carries requiredTransitions.`
+        );
+      }
+      continue;
+    }
+
+    if (witness.disposition !== "COMPLETE" && witness.disposition !== "PARTIAL") {
+      throw new MseViolation(
+        `Admission failure "${failure.relationId}" has unknown witness disposition.`
+      );
+    }
+    if (!Array.isArray(witness.requiredTransitions) || witness.requiredTransitions.length === 0) {
+      throw new MseViolation(
+        `Admission failure "${failure.relationId}" advertises ${witness.disposition} repair ` +
+          `without a non-empty requiredTransitions list.`
+      );
+    }
+
+    const seenRequiredLocators = new Set<string>();
+    for (const required of witness.requiredTransitions) {
+      assertUnitLocatorWellFormed(
+        required.unitLocator,
+        `Admission failure "${failure.relationId}" required transition`
+      );
+      if (!Object.prototype.hasOwnProperty.call(required, "transition")) {
+        throw new MseViolation(
+          `Admission failure "${failure.relationId}" carries a required unit with no transition.`
+        );
+      }
+      if (required.unitLocator.scopeRef !== relation.scopeRef) {
+        throw new MseViolation(
+          `Admission failure "${failure.relationId}" references unit scope ` +
+            `"${required.unitLocator.scopeRef}", outside declared scope "${relation.scopeRef}".`
+        );
+      }
+
+      const requiredKey = unitLocatorKey(required.unitLocator);
+      if (seenRequiredLocators.has(requiredKey)) {
+        throw new MseViolation(
+          `Admission failure "${failure.relationId}" repeats unitLocator ` +
+            `${JSON.stringify(required.unitLocator)}; duplicate or contradictory transitions ` +
+            `for one unit are not an unambiguous witness.`
+        );
+      }
+      seenRequiredLocators.add(requiredKey);
+
+      if (quotedLocators.has(requiredKey)) {
+        throw new MseViolation(
+          `Admission failure "${failure.relationId}" calls ` +
+            `${JSON.stringify(required.unitLocator)} missing even though that unit is already ` +
+            `present in the evaluated quote.`
+        );
+      }
     }
   }
 }
@@ -376,32 +591,50 @@ export function assertAggregateHintConsistent(result: CommitResult): void {
  * Throws MseViolation on the first violation found. Returns void otherwise.
  */
 export function assertReconciliationContractHonored(unitResult: UnitResult): void {
-  if (unitResult.outcome === "INDETERMINATE") {
-    if (!unitResult.reconciliation) {
+  const candidate = unitResult as {
+    unitRef: string;
+    outcome: UnitResult["outcome"];
+    refusalReason?: string;
+    committedEffects?: Effect[];
+    reconciliation?: Reconciliation;
+  };
+
+  if (
+    candidate.outcome === "APPLIED" &&
+    !Array.isArray(candidate.committedEffects)
+  ) {
+    throw new MseViolation(
+      `UnitResult for unitRef "${candidate.unitRef}" is APPLIED but carries no ` +
+        `committedEffects array. It MUST be present even when empty.`
+    );
+  }
+
+  if (candidate.outcome === "INDETERMINATE") {
+    if (!candidate.reconciliation) {
       throw new MseViolation(
-        `UnitResult for unitRef "${unitResult.unitRef}" is INDETERMINATE but carries no ` +
+        `UnitResult for unitRef "${candidate.unitRef}" is INDETERMINATE but carries no ` +
           `reconciliation. An INDETERMINATE UnitResult MUST expose a reconciliation contract ` +
           `— see /spec/normative-spec.md §4b.`
       );
     }
-    assertReconciliationWellFormed(unitResult.reconciliation, unitResult.unitRef);
+    assertReconciliationWellFormed(candidate.reconciliation, candidate.unitRef);
 
-    if (unitResult.committedEffects) {
+    if (candidate.committedEffects) {
       throw new MseViolation(
-        `UnitResult for unitRef "${unitResult.unitRef}" is INDETERMINATE but carries ` +
+        `UnitResult for unitRef "${candidate.unitRef}" is INDETERMINATE but carries ` +
           `committedEffects. A provider MUST NOT claim effects it does not know occurred.`
       );
     }
-  } else if (unitResult.reconciliation) {
+  } else if (candidate.reconciliation) {
     throw new MseViolation(
-      `UnitResult for unitRef "${unitResult.unitRef}" has outcome ${unitResult.outcome} but ` +
+      `UnitResult for unitRef "${candidate.unitRef}" has outcome ${candidate.outcome} but ` +
         `carries a reconciliation, which is only meaningful for INDETERMINATE.`
     );
   }
 
-  if (unitResult.outcome === "REFUSED" && unitResult.committedEffects) {
+  if (candidate.outcome === "REFUSED" && candidate.committedEffects) {
     throw new MseViolation(
-      `UnitResult for unitRef "${unitResult.unitRef}" is REFUSED but carries committedEffects.`
+      `UnitResult for unitRef "${candidate.unitRef}" is REFUSED but carries committedEffects.`
     );
   }
 }

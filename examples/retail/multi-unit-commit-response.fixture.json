@@ -1,0 +1,28 @@
+{
+  "commitResponse": {
+    "kind": "COMMIT_RESULT",
+    "commitResult": {
+      "quoteId": "quote_retail_9901_1",
+      "unitResults": [
+        {
+          "unitRef": "order_9901:line_1_qty_change",
+          "outcome": "APPLIED",
+          "committedEffects": [
+            {
+              "effectId": "order_9901:line_1:order_total_delta",
+              "type": "retail:order_total_delta",
+              "value": { "type": "money", "amount": "15.00", "currency": "USD" },
+              "guarantee": { "mode": "EXACT", "validUntil": "2026-09-02T18:00:00Z" }
+            }
+          ]
+        },
+        {
+          "unitRef": "order_9901:line_2_swap",
+          "outcome": "REFUSED",
+          "refusalReason": "retail:line_item_unavailable"
+        }
+      ],
+      "aggregateHint": "MIXED"
+    }
+  }
+}

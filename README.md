@@ -1,15 +1,15 @@
 # Mutation Safety Envelope (MSE)
 
-**Status:** Experimental / External Review Candidate — v0.2.0
+**Status:** Experimental / External Review Candidate — v0.3.0
 **License:** Apache-2.0
 
-> **v0.2.0 is a breaking revision of v0.1.0**, made in direct response to
-> external technical falsification (UCP Discussion #799). See
-> [`/docs/v0.2-review-response.md`](docs/v0.2-review-response.md) for what
-> was falsified and what changed, and
-> [`/spec/normative-spec.md`](spec/normative-spec.md) §9 for the exact
-> compatibility break. This is evidence-driven revision, not a claim of
-> UCP adoption or endorsement.
+> **v0.3.0 is a breaking revision of v0.2.0.** It adds quote-declared,
+> live-evaluated cross-unit admission dependencies and structured repair
+> witnesses while preserving v0.2.0's per-unit outcomes and reconciliation.
+> See [`/docs/v0.3-review-response.md`](docs/v0.3-review-response.md) and
+> [`/spec/normative-spec.md`](spec/normative-spec.md) §9. This is proposed
+> MSE design work informed by UCP Discussion #799, not a claim of UCP
+> adoption or endorsement.
 
 > MSE is **not** an official specification of UCP, ACP, Shopify, Salesforce,
 > IATA, Paid, Stripe, Paddle, Zuora, Chargebee, or any other vendor or
@@ -38,11 +38,16 @@ boundary without standardizing the underlying commerce domain.
 Proposal
    ↓
 Quote (one or more independently committing units)
-   └── per unit: predicted effects
+   ├── per unit: scoped identity + opaque transition + predicted effects
          ├── guarantee per effect   (EXACT | REVALIDATE | UNKNOWN)
          ├── guarantee horizon
          └── acceptance constraints
+   └── stable directional admission relations (no frozen witness)
    ↓
+Admission against live state
+   ├── refused before dispatch → witness → amended proposal → new quote
+   └── passed
+         ↓
 Commit  →  one result PER UNIT, not one for the whole mutation:
    ├── unit A: APPLIED
    ├── unit B: REFUSED
@@ -52,10 +57,12 @@ Receipt
    └── per committed effect, effect finality: FINAL | PENDING | FAILED | UNKNOWN
 ```
 
-MSE distinguishes three separate safety questions that a single `SUCCESS`
-flag collapses: **quote stability**, **commit determinacy** (now per
-independently committing unit, as of v0.2.0), and **effect finality**. See
-[`/spec/normative-spec.md`](spec/normative-spec.md) §2, §1a-§1c.
+MSE distinguishes a pre-dispatch admission gate plus three separate safety
+questions that a single `SUCCESS` flag collapses: **quote stability**,
+**admission validity**, **commit determinacy** (per independently
+committing unit), and **effect finality**. Admission is not a fourth commit
+outcome; it is the known no-dispatch branch. See
+[`/spec/normative-spec.md`](spec/normative-spec.md) §1d, §2, §3.2.
 
 ## Repository layout
 
@@ -75,8 +82,11 @@ independently committing unit, as of v0.2.0), and **effect finality**. See
   security-considerations.md
   conformance.md
   falsification-notes.md   What's been tested, what hasn't, what would falsify the hypothesis
-  readiness-report.md      Publication readiness report, v0.1.0 and v0.2.0 status
-  v0.2-review-response.md  What UCP Discussion #799 falsified in v0.1.0, and what changed
+  readiness-report.md      Publication readiness report and revision history
+  v0.2-review-response.md  Historical per-unit outcomes + reconciliation response
+  v0.3-design-decision.md  Admission response and repair-by-requote decision
+  v0.3-review-response.md  Traceability for the live-witness iteration
+  v0.3-audit-report.md     Semantic and consistency self-review findings
 ```
 
 ## What MSE does not define
@@ -108,29 +118,31 @@ different domains instantiate the same core without adding to it.
 
 ```bash
 npm install
-npm test                # runs behavioral + schema-conformance tests (84 as of v0.2.0)
+npm test                # runs behavioral + schema-conformance tests (142 as of v0.3.0)
 npm run build            # tsc typecheck/build
 npm run validate-schema  # compiles the JSON Schema standalone under ajv strict mode
 ```
 
 ## Before you rely on this
 
-This is a v0.2.0 external-review candidate, not a finished or
+This is a v0.3.0 external-review candidate, not a finished or
 production-hardened specification. Start with:
 
 1. [`/docs/DISCLAIMER.md`](docs/DISCLAIMER.md) — what MSE is not.
-2. [`/docs/v0.2-review-response.md`](docs/v0.2-review-response.md) — what
-   external review (UCP Discussion #799) falsified in v0.1.0's
-   mutation-wide commit outcome and undefined `INDETERMINATE` resolution
-   path, and what changed in response.
-3. [`/docs/ambiguities.md`](docs/ambiguities.md) — known design questions
-   across both revisions; three remain genuinely open (concurrent quotes,
-   per-unit consistency policy, cross-unit shared effects).
-4. [`/docs/falsification-notes.md`](docs/falsification-notes.md) — what has
+2. [`/docs/v0.3-review-response.md`](docs/v0.3-review-response.md) — what
+   the later stable-relation/live-witness feedback changed, and what it did
+   not establish.
+3. [`/docs/v0.2-review-response.md`](docs/v0.2-review-response.md) — the
+   preserved historical response on per-unit outcomes and reconciliation.
+4. [`/docs/v0.3-audit-report.md`](docs/v0.3-audit-report.md) — adversarial
+   semantic and cross-artifact consistency findings.
+5. [`/docs/ambiguities.md`](docs/ambiguities.md) — resolved and open design
+   questions, including remaining concurrency and shared-effect limits.
+6. [`/docs/falsification-notes.md`](docs/falsification-notes.md) — what has
    and has not actually been tested.
-5. [`/docs/readiness-report.md`](docs/readiness-report.md) — the
+7. [`/docs/readiness-report.md`](docs/readiness-report.md) — the
    publication readiness report, covering both the v0.1.0 publication and
-   the current v0.2.0 revision's status.
+   the current v0.3.0 revision's status.
 
 ## Review question
 
