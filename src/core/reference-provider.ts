@@ -1,5 +1,5 @@
 /**
- * Mutation Safety Envelope (MSE) — reference provider, v0.2.0.
+ * Mutation Safety Envelope (MSE) — reference provider, v0.3.0.
  *
  * A minimal, in-memory, domain-blind implementation of the MSE lifecycle.
  * This exists to (a) prove the schema is implementable and (b) give the
@@ -11,17 +11,16 @@
  *
  * This is reference behavior, not the only legal implementation.
  *
- * v0.2.0 change: commit processing is now per CommittingUnit, producing
- * one UnitResult per unit rather than a single mutation-wide outcome.
- * Fault injection is scoped per unit and reconciliation can resolve to
- * APPLIED, REFUSED, or remain unresolved — it does not deterministically
- * become APPLIED, because a real reconciliation/authoritative-read path
- * can discover that a mutation did NOT apply. See
- * /docs/v0.2-review-response.md.
+ * v0.3.0 change: commit() now returns a discriminated CommitResponse so a
+ * known pre-dispatch admission refusal remains separate from the existing
+ * per-unit CommitResult. See /docs/v0.3-design-decision.md.
  */
 
 import type {
+  AdmissionFailure,
+  AdmissionRefusal,
   CommitRequest,
+  CommitResponse,
   CommitResult,
   CommittingUnit,
   Effect,
@@ -36,10 +35,34 @@ import {
   evaluateAcceptanceConstraints,
   isQuoteExpired,
   assertQuoteUnitsWellFormed,
+  assertAdmissionRefusalWellFormed,
   computeAggregateHint,
+  MseViolation,
 } from "./validate";
 
-export type Quoter = (proposal: MutationProposal) => Omit<MutationQuote, "quoteId">;
+export type Quoter = (
+  proposal: MutationProposal
+) => Omit<MutationQuote, "quoteId" | "admissionRelations"> &
+  Partial<Pick<MutationQuote, "admissionRelations">>;
+
+/** Binding-owned live evaluation result for quote-declared admission relations. */
+export interface AdmissionEvaluation {
+  /** Optional evidence identifying the state that was evaluated. Not a lock. */
+  stateRef?: unknown;
+  /** Empty means the declared relations passed at this evaluation. */
+  failures: AdmissionFailure[];
+}
+
+/**
+ * A synchronous, observational binding hook. It parses opaque transitions and
+ * reads current domain state but MUST NOT dispatch a commercial mutation; the
+ * core only validates/correlates its returned failures.
+ */
+export type AdmissionEvaluator = (
+  proposal: MutationProposal,
+  quote: MutationQuote,
+  now: Date
+) => AdmissionEvaluation;
 
 /**
  * Optional hook a domain example can use to simulate effects whose
@@ -100,6 +123,8 @@ interface PendingReconciliation {
 
 export class ReferenceProvider {
   private quotesById = new Map<string, MutationQuote>();
+  /** Originating proposal retained so admission evaluates the quoted transition set. */
+  private proposalsByQuoteId = new Map<string, MutationProposal>();
   private snapshotsByTarget = new Map<string, unknown>();
   /** Latest UnitResult[] per quoteId, so receipt() and reconciliation can see current state. */
   private unitResultsByQuoteId = new Map<string, UnitResult[]>();
@@ -109,7 +134,8 @@ export class ReferenceProvider {
   constructor(
     private readonly quoter: Quoter,
     private readonly drift: DriftSimulator = {},
-    private readonly fault: FaultInjector = {}
+    private readonly fault: FaultInjector = {},
+    private readonly admission?: AdmissionEvaluator
   ) {}
 
   /** Registers (or updates) the current snapshot reference for a target resource. */
@@ -117,24 +143,30 @@ export class ReferenceProvider {
     this.snapshotsByTarget.set(JSON.stringify(target), snapshot);
   }
 
-  /** Step 1: Proposal -> Quote. */
+  /** Step 1: Proposal -> Quote; retains proposal context for admission. */
   quote(proposal: MutationProposal): MutationQuote {
     const partial = this.quoter(proposal);
-    const quote: MutationQuote = { ...partial, quoteId: nextQuoteId() };
+    const quote: MutationQuote = {
+      ...partial,
+      admissionRelations: partial.admissionRelations ?? [],
+      quoteId: nextQuoteId(),
+    };
     assertQuoteUnitsWellFormed(quote);
     this.quotesById.set(quote.quoteId, quote);
+    this.proposalsByQuoteId.set(quote.quoteId, proposal);
     return quote;
   }
 
   /**
-   * Step 2: Quote -> Commit. Produces one UnitResult per CommittingUnit in
-   * the quote (spec §1b complete-coverage requirement). Quote-level
+   * Step 2: Quote -> admission/commit response. A known admission failure
+   * returns before the dispatch loop. Otherwise produces one UnitResult per
+   * CommittingUnit in the quote (spec §1b complete-coverage requirement). Quote-level
    * failures (unknown quote, expired, snapshot mismatch) still short-circuit
    * to a uniform result across all units, since none of them ever reached
    * per-unit processing; constraint violations and timeouts, by contrast,
    * are evaluated and can differ per unit.
    */
-  commit(request: CommitRequest, now: Date = new Date()): CommitResult {
+  commit(request: CommitRequest, now: Date = new Date()): CommitResponse {
     const quote = this.quotesById.get(request.quoteId);
 
     if (!quote) {
@@ -145,7 +177,14 @@ export class ReferenceProvider {
       const unitResults: UnitResult[] = [
         { unitRef: "unknown", outcome: "REFUSED", refusalReason: "PROVIDER_REJECTED" },
       ];
-      return { quoteId: request.quoteId, unitResults, aggregateHint: computeAggregateHint(unitResults) };
+      return {
+        kind: "COMMIT_RESULT",
+        commitResult: {
+          quoteId: request.quoteId,
+          unitResults,
+          aggregateHint: computeAggregateHint(unitResults),
+        },
+      };
     }
 
     if (isQuoteExpired(quote, now)) {
@@ -154,7 +193,14 @@ export class ReferenceProvider {
         outcome: "REFUSED",
         refusalReason: "QUOTE_EXPIRED",
       }));
-      return { quoteId: quote.quoteId, unitResults, aggregateHint: computeAggregateHint(unitResults) };
+      return {
+        kind: "COMMIT_RESULT",
+        commitResult: {
+          quoteId: quote.quoteId,
+          unitResults,
+          aggregateHint: computeAggregateHint(unitResults),
+        },
+      };
     }
 
     if (quote.commitConsistency === "SNAPSHOT_REQUIRED") {
@@ -166,7 +212,14 @@ export class ReferenceProvider {
           refusalReason: "SNAPSHOT_MISMATCH",
         }));
         this.unitResultsByQuoteId.set(quote.quoteId, unitResults);
-        return { quoteId: quote.quoteId, unitResults, aggregateHint: computeAggregateHint(unitResults) };
+        return {
+          kind: "COMMIT_RESULT",
+          commitResult: {
+            quoteId: quote.quoteId,
+            unitResults,
+            aggregateHint: computeAggregateHint(unitResults),
+          },
+        };
       }
     }
 
@@ -174,6 +227,38 @@ export class ReferenceProvider {
     const violatedEffectIds = new Set<string>();
     if (violated.length > 0) {
       for (const c of violated) violatedEffectIds.add(c.effectId);
+    }
+
+    const proposal = this.proposalsByQuoteId.get(quote.quoteId);
+    if (!proposal) {
+      throw new MseViolation(`ReferenceProvider lost proposal context for quote "${quote.quoteId}".`);
+    }
+
+    if (quote.admissionRelations.length > 0) {
+      const evaluation: AdmissionEvaluation = this.admission
+        ? this.admission(proposal, quote, now)
+        : {
+            failures: quote.admissionRelations.map((relation) => ({
+              relationId: relation.relationId,
+              witness: { disposition: "UNAVAILABLE" },
+            })),
+          };
+
+      if (!evaluation || !Array.isArray(evaluation.failures)) {
+        throw new MseViolation(`Admission evaluator returned a malformed evaluation.`);
+      }
+
+      if (evaluation.failures.length > 0) {
+        const admissionRefusal: AdmissionRefusal = {
+          quoteId: quote.quoteId,
+          proposalId: proposal.proposalId,
+          evaluatedAt: now.toISOString(),
+          ...(evaluation.stateRef === undefined ? {} : { stateRef: evaluation.stateRef }),
+          failures: evaluation.failures,
+        };
+        assertAdmissionRefusalWellFormed(quote, proposal, admissionRefusal);
+        return { kind: "ADMISSION_REFUSED", admissionRefusal };
+      }
     }
 
     const unitResults: UnitResult[] = quote.units.map((unit) => {
@@ -209,7 +294,14 @@ export class ReferenceProvider {
 
     this.unitResultsByQuoteId.set(quote.quoteId, unitResults);
 
-    return { quoteId: quote.quoteId, unitResults, aggregateHint: computeAggregateHint(unitResults) };
+    return {
+      kind: "COMMIT_RESULT",
+      commitResult: {
+        quoteId: quote.quoteId,
+        unitResults,
+        aggregateHint: computeAggregateHint(unitResults),
+      },
+    };
   }
 
   /**

@@ -1,6 +1,6 @@
 # Security considerations
 
-**Status:** v0.2.0, external review candidate. This is a first pass, not an
+**Status:** v0.3.0, external review candidate. This is a first pass, not an
 exhaustive threat model. Reviewers are explicitly invited to falsify or
 extend it — see [`/docs/falsification-notes.md`](./falsification-notes.md).
 
@@ -18,6 +18,42 @@ provider MUST perform its own authorization check on every `CommitRequest`
 independent of anything in the quote. A client-supplied quote (or a quote
 replayed from another session) MUST NOT be treated as an authorization
 token.
+
+## 1a. An admission witness is information, not authority
+
+A `COMPLETE` witness can name additional transitions needed to repair one
+relation. It does not prove that the caller may perform them. A binding MUST
+authorize the amended proposal—including every added transition—before
+issuing or committing its new quote. Providers SHOULD also consider whether
+witnesses disclose scoped units or state that an unauthorized caller should
+not be allowed to enumerate; authorization therefore belongs before any
+externally visible admission evaluation in a real binding.
+
+`unitLocator` is binding-scoped, not a bearer capability. Possessing a
+locator or copying it into a proposal MUST NOT grant access to that unit.
+
+## 1b. Completeness and state evidence must not become bypasses
+
+Only `AdmissionWitness.disposition: COMPLETE` with a non-empty, unambiguous,
+in-scope transition list can claim local repair for one failed relation.
+`PARTIAL` is explicitly insufficient. `UNAVAILABLE` and `NOT_REPAIRABLE`
+carry no transition list. Callers MUST NOT infer completeness from an omitted
+or empty witness.
+
+`evaluatedAt` and `stateRef` are correlation evidence, not locks. A caller
+MUST obtain a new quote and the provider MUST evaluate current state again.
+Bindings using external state need an atomic validation/dispatch boundary or
+a final revalidation inside their own transaction; the synchronous reference
+provider does not solve distributed concurrency.
+
+An admission evaluator itself MUST be observational: dispatching a quoted
+commercial transition from the hook would invalidate the no-dispatch meaning
+of `ADMISSION_REFUSED`. Core code cannot detect a side effect hidden inside a
+binding hook, so this is a binding conformance and audit obligation.
+
+If dispatch may have occurred, returning `ADMISSION_REFUSED` would falsely
+promise no mutation. The provider MUST instead preserve per-unit determinacy
+and report `INDETERMINATE` plus reconciliation where the outcome is unknown.
 
 ## 2. Fail-closed constraint evaluation is a security property, not just a correctness one
 
@@ -110,6 +146,13 @@ to the MSE core, nothing in MSE itself validates their contents. A
 provider MUST apply its own input validation to these fields exactly as it
 would to any other untrusted input — MSE conformance provides no help here
 and it would be a mistake to assume otherwise.
+
+The same applies to v0.3.0's `CommittingUnit.transition` and
+`RequiredTransition.transition`: the core preserves their presence and
+correlation but cannot validate domain meaning. Core validation can reject a
+wrong scope or repeated locator, but it cannot prove that a binding's
+`COMPLETE` list is semantically complete. That promise is a binding/provider
+conformance obligation and must be tested against real state rules.
 
 ## 7. This repository's own dependency posture
 

@@ -1,0 +1,64 @@
+{
+  "quote": {
+    "quoteId": "quote_cancel_delivery_2",
+    "target": { "orderId": "order_799" },
+    "snapshot": { "orderVersion": 41 },
+    "commitConsistency": "SNAPSHOT_REQUIRED",
+    "units": [
+      {
+        "unitRef": "proposal_cancel_delivery_2:unit:1",
+        "unitLocator": { "scopeRef": "retail:order_799", "unitKey": "delivery" },
+        "transition": { "unitKey": "delivery", "operation": "CANCEL" },
+        "effects": []
+      },
+      {
+        "unitRef": "proposal_cancel_delivery_2:unit:2",
+        "unitLocator": { "scopeRef": "retail:order_799", "unitKey": "goods_1" },
+        "transition": { "unitKey": "goods_1", "operation": "CANCEL" },
+        "effects": []
+      },
+      {
+        "unitRef": "proposal_cancel_delivery_2:unit:3",
+        "unitLocator": { "scopeRef": "retail:order_799", "unitKey": "goods_2" },
+        "transition": { "unitKey": "goods_2", "operation": "CANCEL" },
+        "effects": []
+      }
+    ],
+    "admissionRelations": [
+      {
+        "relationId": "retail:delivery_cancel_requires_goods_cancel",
+        "type": "REQUIRES_COINCLUSION",
+        "triggerUnitRefs": ["proposal_cancel_delivery_2:unit:1"],
+        "scopeRef": "retail:order_799"
+      }
+    ]
+  },
+  "commitRequest": {
+    "quoteId": "quote_cancel_delivery_2",
+    "acceptanceConstraints": []
+  },
+  "commitResponse": {
+    "kind": "COMMIT_RESULT",
+    "commitResult": {
+      "quoteId": "quote_cancel_delivery_2",
+      "unitResults": [
+        {
+          "unitRef": "proposal_cancel_delivery_2:unit:1",
+          "outcome": "APPLIED",
+          "committedEffects": []
+        },
+        {
+          "unitRef": "proposal_cancel_delivery_2:unit:2",
+          "outcome": "APPLIED",
+          "committedEffects": []
+        },
+        {
+          "unitRef": "proposal_cancel_delivery_2:unit:3",
+          "outcome": "APPLIED",
+          "committedEffects": []
+        }
+      ],
+      "aggregateHint": "ALL_APPLIED"
+    }
+  }
+}

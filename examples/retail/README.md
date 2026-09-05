@@ -28,7 +28,46 @@ systems. MSE does not model them; a retail profile that wants to expose them
 would define additional, retail-namespaced effect types (e.g.
 `retail:inventory_reservation_status`) without changing the core schema.
 
+## Cross-unit admission example (v0.3.0)
+
+The executable binding in [`admission-policy.ts`](./admission-policy.ts)
+models two provider-reported gates from UCP Discussion #799. The behavior is
+attributed evidence; the MSE message shapes are proposed here for review.
+
+- Cancelling the separate delivery unit requires cancelling every goods unit
+  that is still active. Already-cancelled goods and cancellations already in
+  the proposal are excluded from the current missing set.
+- Redeeming goods requires delivery redemption while delivery remains in the
+  `COMMITTED` state. The gate stops firing after delivery leaves that state.
+
+The quote declares only a stable, directional `REQUIRES_COINCLUSION`
+relation. The binding evaluates actual current order state immediately before
+dispatch. An admission refusal carries binding-scoped `unitLocator`s and
+explicit required transitions. The caller constructs a new proposal and gets
+a new quote; it never appends missing units to the old commit request.
+
+The binding example also demonstrates the authorization boundary: a witness
+can describe a required transition that the caller is not permitted to make.
+In that case the binding refuses to quote the amended proposal. The witness is
+information, not authority.
+
+Passing admission is not atomic success. Tests deliberately allow a required
+delivery unit to become `REFUSED` or `INDETERMINATE` after co-inclusion passes;
+the complete per-unit result and reconciliation rules remain authoritative.
+Preventing that economic outcome would require a stronger binding-level
+transaction guarantee that this example does not claim.
+
 ## Files
 
 - [`quote.fixture.json`](./quote.fixture.json) — a `MutationQuote` for this scenario, validated in CI against `/schema/mse-core.schema.json`.
 - [`acceptance-constraint.fixture.json`](./acceptance-constraint.fixture.json) — an `AcceptanceConstraint` bounding `retail:order_total_delta <= USD 20.00` using the core's `money` `ComparableValue` variant.
+- [`admission-refusal.fixture.json`](./admission-refusal.fixture.json) — the
+  original proposal, quote, commit request, and complete live witness for two
+  missing goods cancellations.
+- [`amended-proposal.fixture.json`](./amended-proposal.fixture.json) and
+  [`amended-quote.fixture.json`](./amended-quote.fixture.json) — the required
+  repair-by-new-proposal/new-quote flow through a successful commit;
+  quote-local `unitRef`s change while binding-scoped `unitLocator`s identify
+  the same units.
+- [`multi-unit-commit-response.fixture.json`](./multi-unit-commit-response.fixture.json)
+  — the `COMMIT_RESULT` branch with preserved mixed per-unit outcomes.

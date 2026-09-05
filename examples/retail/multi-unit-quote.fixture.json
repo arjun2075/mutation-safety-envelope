@@ -6,6 +6,8 @@
     "units": [
       {
         "unitRef": "order_9901:line_1_qty_change",
+        "unitLocator": { "scopeRef": "retail:order_9901", "unitKey": "line_1" },
+        "transition": { "operation": "CHANGE_QUANTITY", "quantity": 2 },
         "effects": [
           {
             "effectId": "order_9901:line_1:order_total_delta",
@@ -17,6 +19,8 @@
       },
       {
         "unitRef": "order_9901:line_2_swap",
+        "unitLocator": { "scopeRef": "retail:order_9901", "unitKey": "line_2" },
+        "transition": { "operation": "SWAP_ITEM", "replacement": "sku_replacement" },
         "effects": [
           {
             "effectId": "order_9901:line_2:order_total_delta",
@@ -26,6 +30,7 @@
           }
         ]
       }
-    ]
+    ],
+    "admissionRelations": []
   }
 }

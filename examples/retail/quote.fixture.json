@@ -8,6 +8,8 @@
     "units": [
       {
         "unitRef": "order_8842:shipping_change",
+        "unitLocator": { "scopeRef": "retail:order_8842", "unitKey": "delivery" },
+        "transition": { "operation": "CHANGE_SHIPPING_METHOD", "shippingMethod": "expedited" },
         "effects": [
           {
             "effectId": "order_8842:shipping_change:order_total_delta",
@@ -23,6 +25,7 @@
           }
         ]
       }
-    ]
+    ],
+    "admissionRelations": []
   }
 }

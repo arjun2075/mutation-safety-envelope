@@ -6,6 +6,8 @@
     "units": [
       {
         "unitRef": "sub_5591:seat_count_change",
+        "unitLocator": { "scopeRef": "subscription:sub_5591", "unitKey": "seat_count" },
+        "transition": { "operation": "SET_SEAT_COUNT", "seatCount": 25 },
         "effects": [
           {
             "effectId": "sub_5591:seat_count_change:recurring_amount",
@@ -21,6 +23,7 @@
           }
         ]
       }
-    ]
+    ],
+    "admissionRelations": []
   }
 }

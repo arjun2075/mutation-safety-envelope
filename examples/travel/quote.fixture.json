@@ -8,6 +8,8 @@
     "units": [
       {
         "unitRef": "abc123:seg_2:reshop",
+        "unitLocator": { "scopeRef": "travel:ABC123", "unitKey": "seg_2" },
+        "transition": { "operation": "RESHOP", "cabin": "economy" },
         "effects": [
           {
             "effectId": "abc123:seg_2:fare_delta",
@@ -29,6 +31,7 @@
           }
         ]
       }
-    ]
+    ],
+    "admissionRelations": []
   }
 }

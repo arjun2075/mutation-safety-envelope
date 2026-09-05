@@ -1,6 +1,6 @@
 # Mutation Safety Envelope (MSE) — Normative Specification
 
-**Version:** v0.2.0
+**Version:** v0.3.0
 **Status:** Experimental / External Review Candidate
 **Conformance to:** [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) keywords (MUST, SHOULD, MAY, etc.) are used as defined there.
 
@@ -15,14 +15,15 @@ and the design rationale behind the schema's shape. Where this document and
 the schema disagree, treat that as a bug report against one of the two, not
 as license to pick whichever is convenient — file an issue.
 
-**v0.2.0 is a breaking revision of v0.1.0**, made in direct response to
-external technical falsification (UCP Discussion #799 — see
-[`/docs/v0.2-review-response.md`](../docs/v0.2-review-response.md) for the
-full account of what was falsified and what changed). If you have read the
-v0.1.0 spec, do not assume its `CommitOutcome`/mutation-wide `outcome`
-model still applies — §9 below is a compatibility summary, but §1a-§1c,
-§4b-§4c, §6a, and §7a describe the actual v0.2.0 contract and supersede
-the v0.1.0 text on those points.
+**v0.3.0 is a breaking revision of v0.2.0.** It retains v0.2.0's
+per-unit outcomes and read-based reconciliation, and adds the separate
+pre-dispatch admission boundary motivated by later comments in UCP
+Discussion #799. See
+[`/docs/v0.3-review-response.md`](../docs/v0.3-review-response.md) and the
+design decision in
+[`/docs/v0.3-design-decision.md`](../docs/v0.3-design-decision.md).
+These changes are proposed MSE design work, not accepted UCP requirements
+or evidence of adoption. §9 classifies the v0.2.0 → v0.3.0 break.
 
 ---
 
@@ -34,6 +35,9 @@ existing commercial state. It defines:
 - how a mutation attempt decomposes into independently committing units,
   and how predicted effects of each unit are represented with attached
   confidence (`CommittingUnit`, `Effect`, `Guarantee`);
+- how a quote declares directional cross-unit admission relations and how
+  a known pre-dispatch failure reports an honest repair witness
+  (`AdmissionRelation`, `AdmissionRefusal`);
 - how a caller states the bounds it requires before accepting a mutation
   (`AcceptanceConstraint`);
 - the three legal per-unit outcomes of attempting to commit a mutation,
@@ -78,13 +82,17 @@ complete set of independently committing units this quote proposes,
 **known no later than quote time**. Each `CommittingUnit` has:
 
 - an opaque, stable `unitRef`, unique within the quote;
+- a binding-scoped `unitLocator` that can identify the same domain unit
+  across a failure witness and a separately generated quote;
+- an opaque, binding-defined `transition` describing what this unit would
+  dispatch;
 - its own `effects: Effect[]`.
 
 The core assigns **no domain meaning** to what a unit is. A unit MAY
 correspond to a retail order line, a travel segment, a subscription
 component, a contract clause, or anything else a profile/provider defines
 — the core only requires the shape, not the semantics. A quote with a
-single unit is the fully valid degenerate case; v0.2.0 does not require
+single unit is the fully valid degenerate case; v0.3.0 does not require
 multi-unit quotes, only that the shape can represent them when they occur.
 
 A provider MUST NOT invent a unit identity only after execution — the
@@ -92,8 +100,12 @@ purpose of fixing `unitRef`s at quote time is so a caller can check result
 coverage (§1b) against a set it already saw *before* committing, not
 discover the set only from the result.
 
-Every `unitRef` within a quote MUST be unique. A provider producing a
-quote with a duplicate `unitRef` is not conformant; see
+Every `unitRef` and every `(unitLocator.scopeRef, unitLocator.unitKey)`
+pair within a quote MUST be unique. `unitRef` is quote-local: callers MUST
+NOT assume it identifies the same domain unit in a later quote. A
+`unitLocator` is stable only according to the binding's declared
+`scopeRef`; it is not a globally portable identity. A provider producing
+a quote with a duplicate identity is not conformant; see
 [`assertQuoteUnitsWellFormed`](../src/core/validate.ts).
 
 ---
@@ -161,11 +173,39 @@ provider emitting anything else has produced a non-conforming
 
 ---
 
+## 1d. Directional admission relations are not atomic commit groups
+
+A `MutationQuote` carries `admissionRelations: AdmissionRelation[]`, which
+MUST be present and MAY be empty. v0.3.0 defines one deliberately narrow
+relation type: `REQUIRES_COINCLUSION`.
+
+The relation is directional. Its `triggerUnitRefs` name quote-local units
+whose proposed transitions may require additional transitions from
+`scopeRef` to be present in an admissible proposal. Every trigger MUST
+resolve to a unit in the same quote, and that unit's
+`unitLocator.scopeRef` MUST equal the relation's `scopeRef`.
+
+The relation declaration is stable quote material. It MUST NOT embed a
+quote-time list of currently missing units. Domain operations, resource
+states, and the rule deciding which scoped units are currently required
+belong to the binding. The binding evaluates those semantics against live
+state at admission (§3.2).
+
+`REQUIRES_COINCLUSION` means only that transitions must be submitted
+together to pass a pre-dispatch gate. It does **not** make the units an
+atomic transaction. Once admission passes, each unit still receives its
+own `UnitResult`; one can be `APPLIED` while a required companion is
+`REFUSED` or `INDETERMINATE`. A binding that must prevent that economic
+outcome needs a stronger execution/transaction guarantee outside this
+relation.
+
+---
+
 ## 2. The three uncertainty windows
 
 MSE's central design claim is that a single `SUCCESS`/`FAILURE` flag is
 insufficient to describe an agent-initiated mutation of commercial state,
-because it collapses three genuinely independent questions. As of v0.2.0,
+because it collapses three genuinely independent questions. As of v0.3.0,
 the second question is itself now per-unit rather than mutation-wide (see
 §1a-§1c):
 
@@ -190,14 +230,24 @@ downstream effect as an overall failure of that unit, paper over a unit's
 collapse a mixed set of `unitResults` into one summary that discards which
 units actually applied.
 
+Admission validity is an additional **pre-dispatch gate**, not a fourth
+commit outcome and not a fourth effect guarantee. A known
+`ADMISSION_REFUSED` response proves that this submission dispatched no
+commercial mutation. If dispatch may have occurred, the provider MUST use
+the per-unit determinacy model (including `INDETERMINATE` and
+reconciliation) instead of reporting a clean admission refusal.
+
 ---
 
 ## 3. Lifecycle
 
 ```text
-MutationProposal → MutationQuote → CommitRequest → CommitResult → Receipt
-                                                          │
-                                                          └─▶ Reconciliation (per INDETERMINATE unit)
+MutationProposal → MutationQuote → CommitRequest → CommitResponse
+       ▲                                      ├─ ADMISSION_REFUSED
+       │                                      │    └─ witness → new proposal → new quote
+       │                                      └─ COMMIT_RESULT → Receipt
+       │                                              └─ Reconciliation (per INDETERMINATE unit)
+       └──────────────────── amendment always re-enters here
 ```
 
 ### 3.1 MutationProposal → MutationQuote
@@ -227,7 +277,15 @@ actually guarantee it is a conformance violation, not an implementation
 detail — this is precisely the failure mode MSE exists to make visible
 and rejectable.
 
-### 3.2 MutationQuote → CommitRequest → CommitResult
+Each quote MUST also preserve the opaque `transition` associated with
+every `CommittingUnit` and a binding-scoped `unitLocator`. The provider
+MAY retain the originating proposal internally (the reference provider
+does) so a binding hook can evaluate the exact submitted transition set.
+Core code MUST NOT parse transition/domain state vocabulary. The quoter
+and binding are responsible for mapping `MutationProposal.change` into
+quoted units, locators, transitions, effects, and relation declarations.
+
+### 3.2 MutationQuote → CommitRequest → CommitResponse
 
 Before committing, the caller MUST evaluate every `AcceptanceConstraint` it
 holds against the quote's effects. As of v0.2.0, a constraint names its
@@ -255,20 +313,88 @@ against the same acceptanceConstraints carried in the request — a client
 check is not a substitute for provider enforcement, since a caller cannot
 be trusted to have evaluated its own constraints honestly (or at all).
 
-A provider processing a `CommitRequest` MUST produce a `CommitResult`
+After quote-level safety checks and before dispatching any commercial
+mutation, a provider MUST evaluate every applicable quote-declared
+`AdmissionRelation` against the submitted transitions and current binding
+state. The evaluation itself MUST be observational with respect to the
+commercial mutation: a binding MUST NOT dispatch any quoted transition from
+inside an admission evaluator. A provider MAY evaluate several relations
+together, but a returned failure for one relation MUST NOT claim that
+repairing it makes every other relation—or the whole request—admissible.
+
+`CommitResponse` has exactly one branch:
+
+- `ADMISSION_REFUSED` carries an `AdmissionRefusal` and means this
+  submission dispatched **no** commercial mutation;
+- `COMMIT_RESULT` carries the v0.2.0 `CommitResult` with unchanged complete
+  per-unit coverage and determinacy semantics.
+
+An `AdmissionRefusal` MUST correlate to the evaluated `quoteId` and the
+originating `proposalId`, carry an ISO 8601 `evaluatedAt`, and contain at
+least one failure. Its optional `stateRef` is opaque evidence of the state
+the binding evaluated; neither it nor `evaluatedAt` is a lock.
+
+Every failed relation MUST identify a relation declared by the quote and
+carry exactly one explicit witness disposition:
+
+- `COMPLETE` MUST include a non-empty `requiredTransitions` list that is
+  sufficient to construct an amendment for **that relation at that
+  evaluated state**;
+- `PARTIAL` MUST include a non-empty informative list, but the provider
+  MUST NOT advertise it as sufficient for local repair;
+- `UNAVAILABLE` carries no transition list because the provider cannot
+  supply trustworthy repair information;
+- `NOT_REPAIRABLE` carries no transition list because adding transitions
+  cannot repair this failure.
+
+Every `RequiredTransition` names a binding-scoped `unitLocator` whose
+`scopeRef` MUST match the failed relation, plus the opaque required
+`transition`. Duplicate locators, contradictory transitions for one
+locator, quote-present locators advertised as missing, unknown relations,
+and wrong-scope references are non-conforming. Whether an otherwise
+well-shaped locator resolves to a real domain unit is a binding validation
+obligation. Because domain state and transitions are opaque to the core,
+schema and core validation cannot prove that a non-empty `COMPLETE` list is
+semantically complete. That is a provider/binding conformance promise and
+MUST be tested against the binding's declared relation semantics.
+
+A caller using a `COMPLETE` witness MUST construct a new
+`MutationProposal` and obtain a new `MutationQuote`. It MUST NOT append an
+unquoted unit to the old `CommitRequest`. The new quote may assign entirely
+new quote-local `unitRef`s; the binding maps the same domain units through
+`unitLocator`. The amended proposal and quote remain independently subject
+to authorization, expiry, snapshots, acceptance constraints, idempotency,
+and a fresh admission evaluation. A witness conveys required information,
+not permission. Bindings MUST apply their existing authorization policy to
+every added transition and their existing idempotency rules to changed
+request content; MSE does not define either protocol.
+
+The reference provider invokes a synchronous binding evaluator immediately
+before its in-process dispatch loop and performs no asynchronous yield
+between them. That demonstrates a check-before-dispatch boundary and an
+observable zero-dispatch refusal, not a distributed lock. An external-state
+binding MUST document whether it validates and dispatches atomically or
+revalidates within its own transaction. If state can change after the last
+check and dispatch may have occurred, a clean admission refusal is no
+longer available; normal per-unit determinacy and reconciliation apply.
+
+On the `COMMIT_RESULT` branch, a provider processing a `CommitRequest`
+MUST produce a `CommitResult`
 whose `unitResults` gives **exactly one** of the following three outcomes
 **for each unit** (see §1b for the coverage requirement this implies):
 
 - **`APPLIED`** — this unit's mutation was applied. `committedEffects`
   MUST be present and MUST NOT differ from this unit's quoted effects for
-  any effect whose `guarantee.mode` was `EXACT`. (See §4.)
+  any effect whose `guarantee.mode` was `EXACT`. `refusalReason` and
+  `reconciliation` MUST be absent. (See §4.)
 - **`REFUSED`** — this unit's mutation was not applied. `refusalReason`
-  MUST be present. `committedEffects` MUST be absent.
+  MUST be present. `committedEffects` and `reconciliation` MUST be absent.
 - **`INDETERMINATE`** — the provider cannot safely tell the caller whether
   this unit's mutation applied (e.g. a network timeout after the request
   reached the backend). `committedEffects` MUST be absent — a provider
-  MUST NOT claim effects it does not know occurred. `reconciliation` MUST
-  be present (see §4b). A caller receiving `INDETERMINATE` for a unit MUST
+  MUST NOT claim effects it does not know occurred. `refusalReason` MUST
+  also be absent; `reconciliation` MUST be present (see §4b). A caller
+  receiving `INDETERMINATE` for a unit MUST
   NOT retry that unit's commit as if it were a clean `REFUSED`, because a
   naive retry may cause a duplicate mutation for that unit specifically —
   other units in the same `CommitResult` are unaffected and MAY already be
@@ -715,7 +841,9 @@ an untrackable one rather than omission.
    model has no representation for an effect that is a genuine joint
    consequence of more than one unit, as opposed to belonging to exactly
    one. Left open pending real-provider examples of this actually
-   occurring, rather than guessed at.
+   occurring, rather than guessed at. Admission relations can represent a
+   separate delivery unit that gates goods transitions; they do not solve
+   ownership of a genuinely joint tax/shared effect.
 4. **Whether `AggregateHint` should be richer than four values.** v0.2.0
    keeps it minimal (`ALL_APPLIED` / `ALL_REFUSED` / `ALL_INDETERMINATE` /
    `MIXED`) specifically because it is explicitly non-authoritative
@@ -724,10 +852,36 @@ an untrackable one rather than omission.
    more useful without encouraging misuse as an authoritative field. Not
    pursued in this revision to avoid growing a field whose entire point is
    to stay minimal and clearly secondary to `unitResults`.
+5. **Whether one directional co-inclusion relation is sufficient.**
+   v0.3.0 intentionally avoids a generic constraint/workflow language.
+   More relation types require concrete provider evidence before entering
+   the core.
+6. **How external-state bindings close the admission-to-dispatch gap.**
+   The reference provider is synchronous and in-process; it does not prove
+   that a distributed provider can offer the same boundary without a
+   binding-specific transaction or final revalidation mechanism.
 
 ---
 
-## 9. Compatibility with v0.1.0 (breaking changes)
+## 9. Compatibility with v0.2.0 (breaking changes)
+
+v0.3.0 is a **breaking revision**, not a patch. Compatibility differs by
+surface:
+
+| Surface | v0.2.0 | v0.3.0 impact |
+|---|---|---|
+| Quote wire schema | `CommittingUnit` had `unitRef` + `effects`; no `admissionRelations` | Every unit additionally requires `unitLocator` + `transition`; every quote requires `admissionRelations` (possibly empty). Old closed-schema consumers reject these fields, and old producers omit required fields. |
+| Commit wire/API | `commit()` returned `CommitResult` directly | `commit()` returns discriminated `CommitResponse`; callers must branch before reading `commitResult`. |
+| TypeScript callers | Direct access to `response.unitResults` | Narrow `response.kind === "COMMIT_RESULT"`, then access `response.commitResult.unitResults`; handle `ADMISSION_REFUSED`. |
+| Existing providers | No proposal retention or admission hook | Populate new quote fields, retain/map submitted transitions, and evaluate declared relations; the reference provider fails closed with `UNAVAILABLE` when a relation exists without an evaluator. |
+| Per-unit result/reconciliation/receipt | v0.2.0 outcomes and semantics; schema/types accidentally allowed `APPLIED` without `committedEffects` despite normative prose | Preserved inside `COMMIT_RESULT`; schema/types now enforce the existing requirement that `APPLIED` carries `committedEffects` (even when empty) and that outcome-specific fields are exclusive. |
+
+There is no legal in-place amendment of a v0.2.0/v0.3.0 quote. A repaired
+proposal receives a new quote. Supporting both versions requires separate
+schema identifiers and explicit API version dispatch; implementations MUST
+NOT silently reinterpret one version as the other.
+
+### Historical v0.2.0 compatibility with v0.1.0
 
 v0.2.0 is a **breaking revision**. The following v0.1.0 shapes no longer
 exist and MUST NOT be produced or expected by a v0.2.0-conformant
@@ -746,8 +900,7 @@ implementation:
 
 There is no automatic migration: a v0.1.0 message is not a valid v0.2.0
 message and vice versa. An implementation supporting both versions MUST
-treat them as distinct schemas (distinct `$id` — see
-[`/schema/mse-core.schema.json`](../schema/mse-core.schema.json)'s
+treat them as distinct schemas (the historical v0.2.0 schema used the
 `https://mutation-safety-envelope.org/schema/v0.2.0/...` identifier) and
 MUST NOT attempt to silently interpret one as the other.
 

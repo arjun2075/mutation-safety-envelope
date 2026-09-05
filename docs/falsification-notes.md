@@ -1,6 +1,6 @@
 # Evidence and falsification notes
 
-**Status:** v0.2.0, external review candidate. This document is the honest
+**Status:** v0.3.0, external review candidate. This document is the honest
 account of what has and has not been tested, aimed at reviewers whose job
 is to find where MSE breaks — not to promote it.
 
@@ -12,10 +12,10 @@ resolution path) — both accepted and addressed in v0.2.0. See
 [`/docs/v0.2-review-response.md`](./v0.2-review-response.md) for the full
 account. This is meaningfully more evidence than v0.1.0 had, but it does
 not change the fundamental posture below: internal consistency is not
-external validation, and the new v0.2.0 shapes (`CommittingUnit`,
-`UnitResult`, `Reconciliation`, `effectId`) have themselves not yet been
-externally reviewed — they are the current best response to the first
-round of criticism, offered for a second round.
+external validation. The later comments did test the distinction between
+independent commit and dependent admission, but the v0.3.0 response shapes
+(`AdmissionRelation`, `UnitLocator`, `AdmissionRefusal`, `CommitResponse`)
+have not themselves been independently reviewed.
 
 The central hypothesis under test, per the source handoff brief:
 
@@ -26,6 +26,15 @@ The central hypothesis under test, per the source handoff brief:
 The stated next milestone is external technical criticism, not more
 features. This document is the current evidence base for that criticism to
 work against.
+
+Later comments in the same discussion supplied another falsification of the
+v0.2.0 surface: independently committing units were not necessarily
+independently admissible, while `CommitRequest` had no amendment path. v0.3.0
+responds with stable quote relations, live admission witnesses, and an
+explicit repair-by-new-proposal/new-quote lifecycle. See
+[`/docs/v0.3-review-response.md`](./v0.3-review-response.md). The response is
+again self-consistency work informed by external criticism, not external
+validation of the resulting v0.3.0 shapes.
 
 ## What has been checked in this repository
 
@@ -40,7 +49,8 @@ work against.
    validates against the core schema without requiring any core schema
    change to accommodate a domain. This is the strongest evidence in favor
    of the hypothesis currently in this repository.
-3. **Reference-implementation behavioral tests.** `test/core.test.ts`
+3. **Reference-implementation behavioral tests.** `test/core.test.ts` and
+   `test/admission.test.ts`
    exercises: fail-closed constraint evaluation (missing effect, `UNKNOWN`
    guarantee, violated bound, type-mismatched bound), quote expiry,
    EXACT-guarantee drift detection, and (as of v0.2.0) all three
@@ -50,8 +60,12 @@ work against.
    effect and full reconciliation round-trips (`INDETERMINATE`→`APPLIED`,
    `INDETERMINATE`→`REFUSED`, and `INDETERMINATE`→still-unresolved) — via a
    from-scratch in-memory provider (`ReferenceProvider`) that holds no
-   domain knowledge. 84 tests pass as of v0.2.0 (up from 47 at the end of
-   the v0.1.0 hardening pass).
+   domain knowledge. The v0.3.0 retail binding additionally exercises both
+   reported delivery gates, witness completeness and scope, zero-dispatch
+   refusals, fresh-state repair, retained quote/snapshot/constraint checks,
+   and post-admission mixed/indeterminate results. 142 tests pass as of
+   v0.3.0. The untouched v0.2.0 baseline actually ran 102 tests; older
+   84-test statements were stale documentation, not the observed baseline.
 4. **Two real strict-mode schema bugs were found and fixed** during v0.1.0
    preparation (both in conditional `if`/`then` blocks in `CommitResult`),
    which is itself a small piece of evidence that the schema had not been
@@ -61,10 +75,9 @@ work against.
    changes, for what that is worth (a smaller, less independently
    informative data point than item 4 originally was, since this revision
    was authored with the earlier lesson already in mind).
-5. **One real round of external technical review has now occurred**
-   (UCP Discussion #799), and both findings it raised were accepted and
-   addressed rather than argued around — see
-   [`/docs/v0.2-review-response.md`](./v0.2-review-response.md). This is
+5. **Real external technical review has occurred** (UCP Discussion #799),
+   and the findings were addressed rather than argued around — see the
+   v0.2.0 and v0.3.0 review-response notes. This is
    the first evidence in this repository's history that did not originate
    from the same process that wrote the schema.
 
@@ -106,8 +119,8 @@ work against.
    portable has not been tested against a second language's type system or
    idioms, which could surface friction TypeScript's structural typing
    hides.
-6. **UCP maintainer feedback has now occurred once** (UCP Discussion #799,
-   addressed in v0.2.0 — see `/docs/v0.2-review-response.md`), but the
+6. **UCP maintainer feedback has occurred** (UCP Discussion #799,
+   addressed in v0.2.0 and v0.3.0 — see the review-response notes), but the
    `/ucp-binding` sketch itself remains a non-normative, unendorsed
    proposal, and the *new* v0.2.0 shapes this feedback produced
    (`CommittingUnit`, `UnitResult`, `Reconciliation`, `effectId`) have not
@@ -132,6 +145,12 @@ work against.
    if a provider tried to represent a shared effect by duplicating it
    across two units). This gap is named rather than filled, consistent
    with the decision not to guess at a resolution.
+9. **No external binding validates the new admission contract.** The retail
+   policy is executable and stateful, but it was authored with the schema and
+   cannot establish that `REQUIRES_COINCLUSION`, `UnitLocator`, or the four
+   witness dispositions are sufficient for another provider. Nor does the
+   synchronous in-process reference hook prove a distributed
+   admission-to-dispatch concurrency guarantee.
 
 ## What would falsify the hypothesis
 

@@ -22,6 +22,8 @@ import type {
   UnitResult,
   ComparableValue,
   EffectReceipt,
+  CommitResponse,
+  CommitResult,
 } from "../src/core/types";
 
 function money(amount: string, currency = "USD"): ComparableValue {
@@ -29,10 +31,24 @@ function money(amount: string, currency = "USD"): ComparableValue {
 }
 
 function unit(unitRef: string, effects: CommittingUnit["effects"] = []): CommittingUnit {
-  return { unitRef, effects };
+  return {
+    unitRef,
+    unitLocator: { scopeRef: "test:scope", unitKey: unitRef },
+    transition: { operation: "TEST" },
+    effects,
+  };
+}
+
+function committed(response: CommitResponse): CommitResult {
+  expect(response.kind).toBe("COMMIT_RESULT");
+  if (response.kind !== "COMMIT_RESULT") {
+    throw new Error("Expected COMMIT_RESULT");
+  }
+  return response.commitResult;
 }
 
 function baseQuote(overrides: Partial<MutationQuote> = {}): MutationQuote {
+  const { admissionRelations, ...otherOverrides } = overrides;
   return {
     quoteId: "q1",
     target: { orderId: "order_1" },
@@ -46,7 +62,8 @@ function baseQuote(overrides: Partial<MutationQuote> = {}): MutationQuote {
         },
       ]),
     ],
-    ...overrides,
+    ...otherOverrides,
+    admissionRelations: admissionRelations ?? [],
   };
 }
 
@@ -154,7 +171,7 @@ describe("assertCommitResultCoversAllUnits — complete coverage (spec §1b)", (
     const result = {
       quoteId: quote.quoteId,
       unitResults: [
-        { unitRef: "unit_a", outcome: "APPLIED" as const },
+        { unitRef: "unit_a", outcome: "APPLIED" as const, committedEffects: [] },
         { unitRef: "unit_b", outcome: "REFUSED" as const, refusalReason: "PROVIDER_REJECTED" as const },
       ],
     };
@@ -164,7 +181,7 @@ describe("assertCommitResultCoversAllUnits — complete coverage (spec §1b)", (
   it("throws MseViolation when a unit is missing from unitResults", () => {
     const result = {
       quoteId: quote.quoteId,
-      unitResults: [{ unitRef: "unit_a", outcome: "APPLIED" as const }],
+      unitResults: [{ unitRef: "unit_a", outcome: "APPLIED" as const, committedEffects: [] }],
     };
     expect(() => assertCommitResultCoversAllUnits(quote, result)).toThrow(MseViolation);
   });
@@ -173,9 +190,9 @@ describe("assertCommitResultCoversAllUnits — complete coverage (spec §1b)", (
     const result = {
       quoteId: quote.quoteId,
       unitResults: [
-        { unitRef: "unit_a", outcome: "APPLIED" as const },
+        { unitRef: "unit_a", outcome: "APPLIED" as const, committedEffects: [] },
         { unitRef: "unit_a", outcome: "REFUSED" as const, refusalReason: "PROVIDER_REJECTED" as const },
-        { unitRef: "unit_b", outcome: "APPLIED" as const },
+        { unitRef: "unit_b", outcome: "APPLIED" as const, committedEffects: [] },
       ],
     };
     expect(() => assertCommitResultCoversAllUnits(quote, result)).toThrow(MseViolation);
@@ -185,9 +202,9 @@ describe("assertCommitResultCoversAllUnits — complete coverage (spec §1b)", (
     const result = {
       quoteId: quote.quoteId,
       unitResults: [
-        { unitRef: "unit_a", outcome: "APPLIED" as const },
-        { unitRef: "unit_b", outcome: "APPLIED" as const },
-        { unitRef: "unit_nonexistent", outcome: "APPLIED" as const },
+        { unitRef: "unit_a", outcome: "APPLIED" as const, committedEffects: [] },
+        { unitRef: "unit_b", outcome: "APPLIED" as const, committedEffects: [] },
+        { unitRef: "unit_nonexistent", outcome: "APPLIED" as const, committedEffects: [] },
       ],
     };
     expect(() => assertCommitResultCoversAllUnits(quote, result)).toThrow(MseViolation);
@@ -246,35 +263,41 @@ describe("assertReconciliationContractHonored — spec §4b", () => {
   });
 
   it("throws MseViolation when an INDETERMINATE unit claims committedEffects", () => {
-    const ur: UnitResult = {
+    const ur = {
       unitRef: "unit_a",
       outcome: "INDETERMINATE",
       reconciliation: { mode: "NONE" },
       committedEffects: [
         { effectId: "eff_1", type: "retail:order_total_delta", value: money("1.00"), guarantee: { mode: "EXACT" } },
       ],
-    };
+    } as unknown as UnitResult;
     expect(() => assertReconciliationContractHonored(ur)).toThrow(MseViolation);
   });
 
   it("throws MseViolation when a non-INDETERMINATE unit carries a reconciliation", () => {
-    const ur: UnitResult = {
+    const ur = {
       unitRef: "unit_a",
       outcome: "APPLIED",
+      committedEffects: [],
       reconciliation: { mode: "NONE" },
-    };
+    } as unknown as UnitResult;
     expect(() => assertReconciliationContractHonored(ur)).toThrow(MseViolation);
   });
 
   it("throws MseViolation when a REFUSED unit carries committedEffects", () => {
-    const ur: UnitResult = {
+    const ur = {
       unitRef: "unit_a",
       outcome: "REFUSED",
       refusalReason: "PROVIDER_REJECTED",
       committedEffects: [
         { effectId: "eff_1", type: "retail:order_total_delta", value: money("1.00"), guarantee: { mode: "EXACT" } },
       ],
-    };
+    } as unknown as UnitResult;
+    expect(() => assertReconciliationContractHonored(ur)).toThrow(MseViolation);
+  });
+
+  it("throws MseViolation when an APPLIED unit omits committedEffects", () => {
+    const ur = { unitRef: "unit_a", outcome: "APPLIED" } as unknown as UnitResult;
     expect(() => assertReconciliationContractHonored(ur)).toThrow(MseViolation);
   });
 });
@@ -646,8 +669,8 @@ describe("assertCommittedEffectsBelongToUnits — committed-effect ownership (sp
 describe("computeAggregateHint / assertAggregateHintConsistent — spec §1c derivation rule", () => {
   it("derives ALL_APPLIED when every unit is APPLIED", () => {
     const unitResults: UnitResult[] = [
-      { unitRef: "unit_a", outcome: "APPLIED" },
-      { unitRef: "unit_b", outcome: "APPLIED" },
+      { unitRef: "unit_a", outcome: "APPLIED", committedEffects: [] },
+      { unitRef: "unit_b", outcome: "APPLIED", committedEffects: [] },
     ];
     expect(computeAggregateHint(unitResults)).toBe("ALL_APPLIED");
   });
@@ -671,13 +694,13 @@ describe("computeAggregateHint / assertAggregateHintConsistent — spec §1c der
   it("derives MIXED for any non-uniform combination of outcomes", () => {
     expect(
       computeAggregateHint([
-        { unitRef: "unit_a", outcome: "APPLIED" },
+        { unitRef: "unit_a", outcome: "APPLIED", committedEffects: [] },
         { unitRef: "unit_b", outcome: "REFUSED", refusalReason: "CONSTRAINT_VIOLATED" },
       ])
     ).toBe("MIXED");
     expect(
       computeAggregateHint([
-        { unitRef: "unit_a", outcome: "APPLIED" },
+        { unitRef: "unit_a", outcome: "APPLIED", committedEffects: [] },
         { unitRef: "unit_b", outcome: "INDETERMINATE", reconciliation: { mode: "NONE" } },
       ])
     ).toBe("MIXED");
@@ -690,11 +713,16 @@ describe("computeAggregateHint / assertAggregateHintConsistent — spec §1c der
   });
 
   it("derives the correct hint for the degenerate single-unit case", () => {
-    expect(computeAggregateHint([{ unitRef: "unit_a", outcome: "APPLIED" }])).toBe("ALL_APPLIED");
+    expect(
+      computeAggregateHint([{ unitRef: "unit_a", outcome: "APPLIED", committedEffects: [] }])
+    ).toBe("ALL_APPLIED");
   });
 
   it("assertAggregateHintConsistent does not throw when aggregateHint is absent", () => {
-    const result = { quoteId: "q1", unitResults: [{ unitRef: "unit_a", outcome: "APPLIED" as const }] };
+    const result = {
+      quoteId: "q1",
+      unitResults: [{ unitRef: "unit_a", outcome: "APPLIED" as const, committedEffects: [] }],
+    };
     expect(() => assertAggregateHintConsistent(result)).not.toThrow();
   });
 
@@ -702,7 +730,7 @@ describe("computeAggregateHint / assertAggregateHintConsistent — spec §1c der
     const result = {
       quoteId: "q1",
       unitResults: [
-        { unitRef: "unit_a", outcome: "APPLIED" as const },
+        { unitRef: "unit_a", outcome: "APPLIED" as const, committedEffects: [] },
         { unitRef: "unit_b", outcome: "REFUSED" as const, refusalReason: "CONSTRAINT_VIOLATED" as const },
       ],
       aggregateHint: "MIXED" as const,
@@ -715,7 +743,7 @@ describe("computeAggregateHint / assertAggregateHintConsistent — spec §1c der
     const result = {
       quoteId: "q1",
       unitResults: [
-        { unitRef: "unit_a", outcome: "APPLIED" as const },
+        { unitRef: "unit_a", outcome: "APPLIED" as const, committedEffects: [] },
         { unitRef: "unit_b", outcome: "REFUSED" as const, refusalReason: "CONSTRAINT_VIOLATED" as const },
       ],
       aggregateHint: "ALL_APPLIED" as const,
@@ -727,8 +755,8 @@ describe("computeAggregateHint / assertAggregateHintConsistent — spec §1c der
     const result = {
       quoteId: "q1",
       unitResults: [
-        { unitRef: "unit_a", outcome: "APPLIED" as const },
-        { unitRef: "unit_b", outcome: "APPLIED" as const },
+        { unitRef: "unit_a", outcome: "APPLIED" as const, committedEffects: [] },
+        { unitRef: "unit_b", outcome: "APPLIED" as const, committedEffects: [] },
       ],
       aggregateHint: "MIXED" as const,
     };
@@ -748,10 +776,10 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     }));
 
     const quote = provider.quote({ proposalId: "p1", target: { orderId: "o1" }, change: {} });
-    const commitResult = provider.commit({
+    const commitResult = committed(provider.commit({
       quoteId: quote.quoteId,
       acceptanceConstraints: [{ effectId: "eff_a1", operator: "<=", value: money("100.00") }],
-    });
+    }));
 
     expect(() => assertCommitResultCoversAllUnits(quote, commitResult)).not.toThrow();
     expect(commitResult.unitResults).toHaveLength(1);
@@ -782,10 +810,10 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     }));
 
     const quote = provider.quote({ proposalId: "p1", target: { pnr: "ABC123" }, change: {} });
-    const commitResult = provider.commit({
+    const commitResult = committed(provider.commit({
       quoteId: quote.quoteId,
       acceptanceConstraints: [{ effectId: "eff_over", operator: "<=", value: money("150.00") }],
-    });
+    }));
 
     expect(() => assertCommitResultCoversAllUnits(quote, commitResult)).not.toThrow();
 
@@ -828,7 +856,9 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     );
 
     const quote = provider.quote({ proposalId: "p1", target: { orderId: "o1" }, change: {} });
-    const commitResult = provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] });
+    const commitResult = committed(
+      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
+    );
 
     expect(() => assertCommitResultCoversAllUnits(quote, commitResult)).not.toThrow();
 
@@ -853,10 +883,10 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     }));
 
     const quote = provider.quote({ proposalId: "p1", target: { orderId: "o1" }, change: {} });
-    const commitResult = provider.commit(
+    const commitResult = committed(provider.commit(
       { quoteId: quote.quoteId, acceptanceConstraints: [] },
       new Date("2021-01-01T00:00:00Z")
-    );
+    ));
 
     expect(() => assertCommitResultCoversAllUnits(quote, commitResult)).not.toThrow();
     expect(commitResult.unitResults.every((r) => r.outcome === "REFUSED")).toBe(true);
@@ -877,7 +907,9 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     provider.setSnapshot(target, "v2");
 
     const quote = provider.quote({ proposalId: "p1", target, change: {} });
-    const commitResult = provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] });
+    const commitResult = committed(
+      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
+    );
 
     expect(commitResult.unitResults[0].outcome).toBe("REFUSED");
     expect(commitResult.unitResults[0].refusalReason).toBe("SNAPSHOT_MISMATCH");
@@ -919,7 +951,9 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     );
 
     const quote = provider.quote({ proposalId: "p1", target: { orderId: "o1" }, change: {} });
-    const commitResult = provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] });
+    const commitResult = committed(
+      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
+    );
     const receipt = provider.receipt(quote.quoteId);
 
     expect(commitResult.unitResults[0].outcome).toBe("APPLIED");
@@ -941,7 +975,9 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     );
 
     const quote = provider.quote({ proposalId: "p1", target: { orderId: "o1" }, change: {} });
-    const commitResult = provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] });
+    const commitResult = committed(
+      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
+    );
     const unitResult = commitResult.unitResults[0];
 
     expect(unitResult.outcome).toBe("INDETERMINATE");
@@ -972,7 +1008,9 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     );
 
     const quote = provider.quote({ proposalId: "p1", target: { orderId: "o1" }, change: {} });
-    const commitResult = provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] });
+    const commitResult = committed(
+      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
+    );
     const correlationId = commitResult.unitResults[0].reconciliation?.correlationId!;
 
     const resolved = provider.reconcile(correlationId);
@@ -997,7 +1035,9 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     );
 
     const quote = provider.quote({ proposalId: "p1", target: { orderId: "o1" }, change: {} });
-    const commitResult = provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] });
+    const commitResult = committed(
+      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
+    );
     const unitResult = commitResult.unitResults[0];
 
     // No reconciliationOutcome handler at all -> mode NONE, no correlationId.
@@ -1019,7 +1059,9 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     );
 
     const quote = provider.quote({ proposalId: "p1", target: { orderId: "o1" }, change: {} });
-    const commitResult = provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] });
+    const commitResult = committed(
+      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
+    );
     const unitResult = commitResult.unitResults[0];
 
     expect(unitResult.reconciliation?.mode).toBe("NONE");
@@ -1046,7 +1088,9 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     );
 
     const quote = provider.quote({ proposalId: "p1", target: { orderId: "o1" }, change: {} });
-    const commitResult = provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] });
+    const commitResult = committed(
+      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
+    );
     const receipt = provider.receipt(quote.quoteId);
 
     expect(() =>
@@ -1072,7 +1116,9 @@ describe("ReferenceProvider — full lifecycle, per-unit commit results", () => 
     }));
 
     const quote = provider.quote({ proposalId: "p1", target: { orderId: "o1" }, change: {} });
-    const commitResult = provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] });
+    const commitResult = committed(
+      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
+    );
     const receipt = provider.receipt(quote.quoteId);
 
     expect(() => assertCommittedEffectsBelongToUnits(quote, commitResult)).not.toThrow();

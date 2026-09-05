@@ -1,7 +1,8 @@
 # Publication readiness report
 
-**Current status: v0.2.0, published.** This repository was published
-publicly at `github.com/arjun2075/mutation-safety-envelope` following the
+**Current status: v0.3.0 external-review candidate on a feature branch;
+published `main` remains v0.2.0.** This repository was published publicly
+at `github.com/arjun2075/mutation-safety-envelope` following the
 v0.1.0 hardening pass recorded below. That publication included creating
 the public repository, pushing `main`, tagging and releasing `v0.1.0`, and
 opening it for external review (which subsequently produced UCP
@@ -11,10 +12,60 @@ Discussion #799 — see
 this document's state *at the time that pass was written*, before
 publication; it is preserved as the historical record of that pre-publication
 gate rather than rewritten, and should not be read as describing the
-repository's current state. **v0.2.0 (this revision) has not been tagged
-or released** — see "v0.2.0 status" immediately below.
+repository's current state. **v0.2.0 was not tagged or released** — see its
+historical status below. The current v0.3.0 candidate is likewise untagged.
 
-## v0.2.0 status (review-hardening revision, current)
+## v0.3.0 status (admission-witness revision, current candidate)
+
+v0.3.0 addresses later UCP Discussion #799 feedback that independently
+committing units can still have dependent admission rules. The design is
+recorded in [`/docs/v0.3-design-decision.md`](./v0.3-design-decision.md), and
+evidence/change traceability is in
+[`/docs/v0.3-review-response.md`](./v0.3-review-response.md).
+
+- Untouched base: `b97d9e2ff9fa32b62b42d86fba70de688d3b0416`
+  (`main`, v0.2.0). Baseline `npm run ci`: 102/102 tests, clean TypeScript,
+  clean strict-mode schema compilation.
+- Candidate verification: 142/142 tests, clean TypeScript, and clean
+  draft-2020-12 AJV strict-mode schema compilation.
+- New behavior: stable quote-declared `REQUIRES_COINCLUSION` relations,
+  binding-scoped unit identity, explicit opaque quoted transitions, live
+  admission witnesses, repair by new proposal/new quote, and a distinct
+  no-dispatch `ADMISSION_REFUSED` response.
+- Preserved behavior: quote expiry/snapshot/acceptance constraints, complete
+  per-unit results, effect ownership/receipt coverage, and read-not-replay
+  reconciliation after `INDETERMINATE`.
+- Consistency repair: v0.3 schema/types now enforce the pre-existing prose
+  requirement that every `APPLIED` result carries `committedEffects`, even
+  when the array is empty, with outcome-specific fields kept exclusive.
+- Compatibility: breaking across quote wire schema, TypeScript callers,
+  `commit()` return shape, and provider implementations. v0.3.0 is therefore
+  the next pre-1.0 minor candidate, not a v0.2.x patch.
+- Publication: no release tag is created by this work. The branch is for
+  external review, not a stable/production declaration.
+
+### v0.3.0 remaining risks
+
+1. The retail binding is executable but still in-repository
+   self-consistency evidence, not an external provider integration.
+2. `REQUIRES_COINCLUSION` is intentionally narrow. Additional relation
+   vocabulary needs concrete provider evidence.
+3. The synchronous reference evaluator demonstrates no dispatch on refusal,
+   not a distributed transaction or lock. External-state bindings need an
+   atomic check/dispatch or final-revalidation mechanism.
+4. Admission co-inclusion does not make commits atomic. A required companion
+   may later be refused or indeterminate, as the tests deliberately show.
+5. Genuinely shared/cross-unit effects remain unresolved; the separate
+   delivery unit example narrows but does not solve that ambiguity.
+
+### v0.3.0 recommendation
+
+Ready for external review as a feature branch. Merge and release/tag decisions
+remain human actions outside this implementation handoff.
+
+---
+
+## v0.2.0 status (historical review-hardening revision)
 
 v0.2.0 was developed on branch `v0.2-review-hardening` in direct response
 to external technical falsification (UCP Discussion #799), per an explicit

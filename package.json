@@ -1,6 +1,6 @@
 {
   "name": "mutation-safety-envelope",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Experimental safety envelope for agent-initiated mutations to existing commercial state. Independent research proposal; not an official spec of any vendor or standards body.",
   "license": "Apache-2.0",
   "private": true,

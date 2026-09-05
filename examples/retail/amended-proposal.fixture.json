@@ -1,0 +1,13 @@
+{
+  "proposal": {
+    "proposalId": "proposal_cancel_delivery_2",
+    "target": { "orderId": "order_799" },
+    "change": {
+      "transitions": [
+        { "unitKey": "delivery", "operation": "CANCEL" },
+        { "unitKey": "goods_1", "operation": "CANCEL" },
+        { "unitKey": "goods_2", "operation": "CANCEL" }
+      ]
+    }
+  }
+}

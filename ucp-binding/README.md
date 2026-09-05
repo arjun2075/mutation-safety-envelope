@@ -48,7 +48,7 @@ Capability: "mutation-safety" (proposed, unregistered)
 
 Operations:
   mse.quote(proposal: MutationProposal) -> MutationQuote
-  mse.commit(request: CommitRequest) -> CommitResult
+  mse.commit(request: CommitRequest) -> CommitResponse
   mse.receipt(quoteId: string) -> Receipt
 ```
 
@@ -56,14 +56,22 @@ A UCP-integrated provider that supports this capability would advertise it
 alongside its existing commerce capabilities, and an agent negotiating with
 that provider would use the existing UCP transport/session/identity layer
 to carry `MutationProposal`/`MutationQuote`/`CommitRequest`/`CommitResult`
-payloads, validated against `/schema/mse-core.schema.json`. As of v0.2.0,
-`mse.commit`'s result carries `unitResults` (one outcome per independently
-committing unit, not a single mutation-wide outcome — see
-`/spec/normative-spec.md` §1a-§1c) and an `INDETERMINATE` unit's
-`reconciliation` field would need its `MACHINE_RESOLVABLE`/
+payloads, validated against `/schema/mse-core.schema.json`. As of v0.3.0,
+`mse.commit` returns a discriminated response: a known pre-dispatch
+`ADMISSION_REFUSED` with a relation witness, or `COMMIT_RESULT` carrying
+one outcome per independently committing unit. A complete witness constructs
+a new proposal and requires a new quote; it never adds an unquoted unit to
+the old commit request. An `INDETERMINATE` unit's `reconciliation` field
+would still need its `MACHINE_RESOLVABLE`/
 `AUTHORITATIVE_READ` invocation path mapped onto whatever reconciliation
 or status-check operation UCP's own transport affords — see the next
 section for why this sketch does not attempt to guess at that mapping.
+
+The UCP binding would also have to define how a binding-scoped
+`UnitLocator` resolves and how domain-specific `transition` values are
+authorized, quoted, and evaluated against current state. MSE defines neither
+UCP authorization nor idempotency semantics. This sketch therefore does not
+claim that carrying a witness grants permission or permits quote reuse.
 
 ## What this sketch deliberately does not attempt
 
@@ -88,6 +96,8 @@ process, and not an endorsement — see
 [`/docs/DISCLAIMER.md`](../docs/DISCLAIMER.md). Whether UCP maintainers
 consider mutation safety a candidate reusable primitive remains an open
 question posed *to* them, not answered *for* them by this repository.
-Further outreach on the v0.2.0 shapes specifically (`CommittingUnit`,
-`UnitResult`, `Reconciliation`, `effectId`) has not yet occurred as of
-this revision.
+The later comments motivating v0.3.0's stable relation/live witness design
+are traced in [`/docs/v0.3-review-response.md`](../docs/v0.3-review-response.md).
+The resulting MSE shapes have not been accepted or adopted by UCP; asking
+whether the modeled gates match the reported implementation remains part of
+external review.
