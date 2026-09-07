@@ -1,7 +1,7 @@
 # Mutation Safety Envelope (MSE) — Normative Specification
 
-**Version:** v0.3.0
-**Status:** Experimental / External Review Candidate
+**Version:** v0.4.0-dev.0
+**Status:** Experimental / Unreleased development revision
 **Conformance to:** [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) keywords (MUST, SHOULD, MAY, etc.) are used as defined there.
 
 > MSE is **not** an official specification of UCP, ACP, Shopify, Salesforce,
@@ -14,6 +14,12 @@ This document describes the rules that schema cannot express on its own,
 and the design rationale behind the schema's shape. Where this document and
 the schema disagree, treat that as a bug report against one of the two, not
 as license to pick whichever is convenient — file an issue.
+
+**v0.4.0-dev.0 adds required admission evaluation coverage**, a breaking
+pre-1.0 revision of v0.3.0. Independent aggregation was already required by
+§3.2; the new representation distinguishes evaluated results from legitimate
+dependency deferral. See [the executable decision gate](../docs/request-reporting-design.md)
+and §9a. The v0.3.0 tag and prerelease are unchanged.
 
 **v0.3.0 is a breaking revision of v0.2.0.** It retains v0.2.0's
 per-unit outcomes and read-based reconciliation, and adds the separate
@@ -314,12 +320,15 @@ check is not a substitute for provider enforcement, since a caller cannot
 be trusted to have evaluated its own constraints honestly (or at all).
 
 After quote-level safety checks and before dispatching any commercial
-mutation, a provider MUST evaluate every applicable quote-declared
-`AdmissionRelation` against the submitted transitions and current binding
-state. The evaluation itself MUST be observational with respect to the
-commercial mutation: a binding MUST NOT dispatch any quoted transition from
-inside an admission evaluator. A provider MAY evaluate several relations
-together, but a returned failure for one relation MUST NOT claim that
+mutation, a provider MUST evaluate every independently evaluable applicable
+quote-declared `AdmissionRelation` against the submitted transitions and current
+binding state. It MUST report all failures discovered in that pass together.
+Fail-fast over independent relations violates this requirement (also present
+in v0.3.0). A genuinely repair-dependent relation MAY be deferred only under
+the coverage rules below. The evaluation itself MUST be observational with
+respect to the commercial mutation: a binding MUST NOT dispatch any quoted
+transition from inside an admission evaluator. A provider MAY evaluate several
+relations together, but a returned failure for one relation MUST NOT claim that
 repairing it makes every other relation—or the whole request—admissible.
 
 `CommitResponse` has exactly one branch:
@@ -333,6 +342,57 @@ An `AdmissionRefusal` MUST correlate to the evaluated `quoteId` and the
 originating `proposalId`, carry an ISO 8601 `evaluatedAt`, and contain at
 least one failure. Its optional `stateRef` is opaque evidence of the state
 the binding evaluated; neither it nor `evaluatedAt` is a lock.
+
+Every `AdmissionRefusal` MUST carry `coverage`, with exactly one
+`AdmissionCoverage` entry per quote-declared relation, including relations
+found inapplicable by evaluation. Entries MUST use one of:
+
+- `PASSED`: evaluated at this pass's state and did not fail (including an
+  applicability check that found the relation inapplicable).
+- `FAILED`: evaluated and failed; exactly one matching `failures` entry MUST
+  exist. Every failure MUST have exactly one FAILED coverage entry.
+- `DEFERRED`: applicable, but evaluation requires repair of another relation
+  in a new proposal/state. It MUST carry nonempty, unique `dependsOn` relation
+  IDs and MUST NOT carry a failure witness for the unevaluated relation.
+
+Only DEFERRED entries may carry `dependsOn`. Each dependency MUST name another
+quote-declared relation and MUST be a genuine binding dependency on its repair,
+not a provider's preferred iteration order. Dependency paths MUST terminate
+in a reported FAILED relation; cycles, self references, and PASSED dependencies
+are invalid. Dependencies express only the reason for deferral in this pass,
+not a generic execution workflow or an instruction to dispatch repairs.
+
+A missing coverage entry, an unknown relation, a duplicate reference, or a
+coverage/failure contradiction is invalid. Early stopping MUST NOT masquerade
+as PASSED or DEFERRED. If evaluation cannot be completed or justified by these
+dependency rules, a provider MUST stop before dispatch and use its binding's
+error mechanism; it MUST NOT invent a known admission failure. In particular,
+absence of an evaluator is not an UNAVAILABLE repair witness.
+
+`coverage`, `failures`, and `dependsOn` are correlated as sets by relation
+identity. Their array order carries no semantic meaning. Providers SHOULD use
+stable ordering for reproducible diagnostics, while callers and validators
+MUST NOT infer evaluation order, dependency priority, or result meaning from
+array position.
+
+Coverage is a promise about this request's **one evaluation pass at the
+evaluated binding state**, not about future requests or a locked snapshot.
+Bindings MUST document the state/read consistency of that pass and the real
+inputs preventing deferred evaluation. Core/schema checks can validate shape
+and correspondence, but only binding evidence can establish that PASSED,
+FAILED, or DEFERRED is truthful. JSON Schema alone cannot cross-check arbitrary
+relation IDs against a quote or correlate the two arrays; runtime validation
+and provider-side trace conformance are also required.
+
+Before dispatch, the reference provider requires hook coverage even if no
+failures were returned; all entries must then be PASSED. `COMMIT_RESULT` does
+not gain coverage: quote-level safety checks can reject before admission, so
+that branch by itself does not establish an admission pass.
+
+An aggregate set of COMPLETE witnesses permits a union amendment only if the
+binding can reconcile and authorize those transitions. It does not promise
+that the next proposal will pass, bound remaining repair round trips under
+state changes or newly activated dependencies, or guarantee atomic commit.
 
 Every failed relation MUST identify a relation declared by the quote and
 carry exactly one explicit witness disposition:
@@ -873,7 +933,7 @@ surface:
 | Quote wire schema | `CommittingUnit` had `unitRef` + `effects`; no `admissionRelations` | Every unit additionally requires `unitLocator` + `transition`; every quote requires `admissionRelations` (possibly empty). Old closed-schema consumers reject these fields, and old producers omit required fields. |
 | Commit wire/API | `commit()` returned `CommitResult` directly | `commit()` returns discriminated `CommitResponse`; callers must branch before reading `commitResult`. |
 | TypeScript callers | Direct access to `response.unitResults` | Narrow `response.kind === "COMMIT_RESULT"`, then access `response.commitResult.unitResults`; handle `ADMISSION_REFUSED`. |
-| Existing providers | No proposal retention or admission hook | Populate new quote fields, retain/map submitted transitions, and evaluate declared relations; the reference provider fails closed with `UNAVAILABLE` when a relation exists without an evaluator. |
+| Existing providers | No proposal retention or admission hook | Populate new quote fields, retain/map submitted transitions, and evaluate declared relations; the v0.3.0 reference provider failed closed with `UNAVAILABLE` when a relation existed without an evaluator (superseded by §9a). |
 | Per-unit result/reconciliation/receipt | v0.2.0 outcomes and semantics; schema/types accidentally allowed `APPLIED` without `committedEffects` despite normative prose | Preserved inside `COMMIT_RESULT`; schema/types now enforce the existing requirement that `APPLIED` carries `committedEffects` (even when empty) and that outcome-specific fields are exclusive. |
 
 There is no legal in-place amendment of a v0.2.0/v0.3.0 quote. A repaired
@@ -911,3 +971,19 @@ identity-agnostic, and domain-blind boundaries (§1) are unchanged. See
 [`/docs/v0.2-review-response.md`](../docs/v0.2-review-response.md) for the
 full account of what was falsified, what changed, and what remains
 unresolved.
+
+
+## 9a. v0.3.0 → v0.4.0-dev.0 compatibility
+
+Required `AdmissionRefusal.coverage` and the public `AdmissionCoverage` union
+change the closed schema and TypeScript API. `AdmissionEvaluation` hooks must
+return coverage on both failed and successful evaluations. Missing hooks now
+raise a pre-dispatch error instead of fabricating UNAVAILABLE failure witnesses.
+These breaks warrant a new minor revision under this pre-1.0 project's convention.
+
+Migrate evaluators to record actual evaluation results for every declaration,
+report all independently evaluable failures, and identify genuine repair
+dependencies. Do not populate PASSED solely because a relation is absent from
+an untrusted/incomplete failure list. Existing witnesses, quote fields,
+per-unit outcomes, reconciliation, and receipts retain their meanings.
+This is unreleased development work; published v0.3.0 artifacts are unchanged.

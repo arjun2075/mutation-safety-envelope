@@ -1,6 +1,6 @@
 # Conformance
 
-**Status:** v0.3.0, external review candidate.
+**Status:** v0.4.0-dev.0, unreleased development revision.
 
 > Conformance here means conformance with **this repository's own** schema
 > and normative spec. It is not, and does not imply, conformance with any
@@ -13,7 +13,7 @@
 
 ## What "conformant" means for a provider
 
-A provider claiming MSE v0.3.0 conformance MUST:
+A provider claiming MSE v0.4.0-dev.0 conformance MUST:
 
 1. Produce `MutationQuote` documents that validate against
    [`/schema/mse-core.schema.json`](../schema/mse-core.schema.json),
@@ -30,7 +30,7 @@ A provider claiming MSE v0.3.0 conformance MUST:
 4. Evaluate every `AcceptanceConstraint` fail-closed per spec §3.2 before
    returning `APPLIED` for the unit(s) it names, correlating by
    `effectId` (not `type`) across all units in the quote (spec §7a).
-5. Evaluate every applicable quote-declared admission relation against
+5. Evaluate every independently evaluable applicable quote-declared admission relation against
    current binding state before dispatch. A known `ADMISSION_REFUSED`
    MUST mean zero commercial mutations were dispatched. Every failure
    MUST name a declared relation and carry an honest `COMPLETE`, `PARTIAL`,
@@ -38,6 +38,12 @@ A provider claiming MSE v0.3.0 conformance MUST:
    witness is sufficient only for its relation and MUST NOT authorize
    added transitions or bypass a new quote. Admission evaluation itself
    MUST be observational and MUST NOT dispatch a quoted transition.
+   Refusals MUST cover every declaration with PASSED, FAILED, or genuinely
+   repair-dependent DEFERRED (spec §3.2). Failures and FAILED coverage entries
+   MUST correspond exactly. Provider-side traces must substantiate evaluation
+   and deferral; schema validity alone does not prove exhaustive reporting.
+   Early stop and missing evaluators MUST fail before dispatch, without
+   inventing a failure witness.
 6. Produce a `CommitResult.unitResults` entry for **every** unit in the
    quote — no silent omission, no duplicates, no unknown `unitRef` (spec
    §1b) — each giving exactly one of `APPLIED` / `REFUSED` /
@@ -111,7 +117,12 @@ A conformant provider is **not** required to:
 
 ## Self-check tooling in this repository
 
+- `node scripts/reproduce-v0.3.mjs` extracts the recorded base core and runs
+  the two unchanged-contract characterization cases (3 refusal/repair cycles).
 - `npm test` runs:
+  - `test/request-reporting.test.ts` — independent aggregation, fresh union
+    repair, authorization, mixed outcomes, dependency deferral, adversarial
+    omission/false-trace cases, and schema versus runtime coverage negatives.
   - `test/core.test.ts` — reference-implementation behavioral tests
     (constraint evaluation, expiry, EXACT-guarantee-drift detection,
     committed-effect ownership, receipt correlation-chain integrity,

@@ -1,5 +1,5 @@
 /**
- * Mutation Safety Envelope (MSE) — reference provider, v0.3.0.
+ * Mutation Safety Envelope (MSE) — reference provider, v0.4.0-dev.0.
  *
  * A minimal, in-memory, domain-blind implementation of the MSE lifecycle.
  * This exists to (a) prove the schema is implementable and (b) give the
@@ -18,6 +18,7 @@
 
 import type {
   AdmissionFailure,
+  AdmissionCoverage,
   AdmissionRefusal,
   CommitRequest,
   CommitResponse,
@@ -36,6 +37,7 @@ import {
   isQuoteExpired,
   assertQuoteUnitsWellFormed,
   assertAdmissionRefusalWellFormed,
+  assertAdmissionCoverageWellFormed,
   computeAggregateHint,
   MseViolation,
 } from "./validate";
@@ -49,14 +51,15 @@ export type Quoter = (
 export interface AdmissionEvaluation {
   /** Optional evidence identifying the state that was evaluated. Not a lock. */
   stateRef?: unknown;
-  /** Empty means the declared relations passed at this evaluation. */
+  /** Empty permits dispatch only when every coverage entry is PASSED. */
   failures: AdmissionFailure[];
+  coverage: AdmissionCoverage[];
 }
 
 /**
  * A synchronous, observational binding hook. It parses opaque transitions and
  * reads current domain state but MUST NOT dispatch a commercial mutation; the
- * core only validates/correlates its returned failures.
+ * core validates coverage and correlates returned failures; truth remains binding-owned.
  */
 export type AdmissionEvaluator = (
   proposal: MutationProposal,
@@ -235,18 +238,16 @@ export class ReferenceProvider {
     }
 
     if (quote.admissionRelations.length > 0) {
-      const evaluation: AdmissionEvaluation = this.admission
-        ? this.admission(proposal, quote, now)
-        : {
-            failures: quote.admissionRelations.map((relation) => ({
-              relationId: relation.relationId,
-              witness: { disposition: "UNAVAILABLE" },
-            })),
-          };
+      if (!this.admission) {
+        throw new MseViolation("Declared admission relations require an evaluator; no result is known.");
+      }
+      const evaluation = this.admission(proposal, quote, now);
 
       if (!evaluation || !Array.isArray(evaluation.failures)) {
         throw new MseViolation(`Admission evaluator returned a malformed evaluation.`);
       }
+
+      assertAdmissionCoverageWellFormed(quote, evaluation.failures, evaluation.coverage);
 
       if (evaluation.failures.length > 0) {
         const admissionRefusal: AdmissionRefusal = {
@@ -255,6 +256,7 @@ export class ReferenceProvider {
           evaluatedAt: now.toISOString(),
           ...(evaluation.stateRef === undefined ? {} : { stateRef: evaluation.stateRef }),
           failures: evaluation.failures,
+          coverage: evaluation.coverage,
         };
         assertAdmissionRefusalWellFormed(quote, proposal, admissionRefusal);
         return { kind: "ADMISSION_REFUSED", admissionRefusal };
