@@ -230,6 +230,9 @@ export function createRetailAdmissionEvaluator(readState: RetailStateReader): Ad
     const failures: AdmissionFailure[] = [];
 
     for (const relation of quote.admissionRelations) {
+      if (relation.relationId !== CANCEL_RELATION && relation.relationId !== REDEEM_RELATION) {
+        throw new Error("Unsupported retail admission relation.");
+      }
       if (relation.relationId === CANCEL_RELATION) {
         const requiredGoods = Object.entries(state.units)
           .filter(([, unitState]) => unitState.kind === "GOODS" && unitState.state !== "CANCELLED")
@@ -287,7 +290,14 @@ export function createRetailAdmissionEvaluator(readState: RetailStateReader): Ad
       }
     }
 
-    return { stateRef: { orderVersion: state.version }, failures };
+    // Both supported rules above have actually been evaluated; absence of a
+    // failure here means this binding observed no failure, not early stopping.
+    const coverage = quote.admissionRelations.map(relation => ({
+      relationId: relation.relationId,
+      status: failures.some(f => f.relationId === relation.relationId)
+        ? "FAILED" as const : "PASSED" as const,
+    }));
+    return { stateRef: { orderVersion: state.version }, failures, coverage };
   };
 }
 

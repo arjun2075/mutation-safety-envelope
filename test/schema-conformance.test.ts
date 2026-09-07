@@ -259,6 +259,7 @@ describe("v0.3.0 admission-message negative cases", () => {
       quoteId: "q1",
       proposalId: "p1",
       evaluatedAt: "2026-09-05T16:00:00Z",
+      coverage: [{ relationId: "retail:requires_companion", status: "FAILED" }],
       failures: [
         {
           relationId: "retail:requires_companion",

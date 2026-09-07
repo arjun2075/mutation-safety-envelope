@@ -1,5 +1,5 @@
 /**
- * Mutation Safety Envelope (MSE) — core types, v0.3.0.
+ * Mutation Safety Envelope (MSE) — core types, v0.4.0-dev.0.
  *
  * This file is a TypeScript mirror of /schema/mse-core.schema.json.
  * The JSON Schema is normative; this file exists for ergonomic use in
@@ -186,6 +186,11 @@ export interface AdmissionFailure {
   witness: AdmissionWitness;
 }
 
+/** Evaluation coverage is separate from the repair disposition of a failure. */
+export type AdmissionCoverage =
+  | { relationId: string; status: "PASSED" | "FAILED"; dependsOn?: never }
+  | { relationId: string; status: "DEFERRED"; dependsOn: string[] };
+
 /** A known pre-dispatch refusal. No commercial mutation was dispatched. */
 export interface AdmissionRefusal {
   quoteId: string;
@@ -196,6 +201,8 @@ export interface AdmissionRefusal {
   stateRef?: unknown;
   /** One or more failed relations. A witness applies only to its own relation. */
   failures: AdmissionFailure[];
+  /** Exactly one entry per quote-declared relation for this evaluation pass. */
+  coverage: AdmissionCoverage[];
 }
 
 /**

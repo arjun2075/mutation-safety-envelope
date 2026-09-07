@@ -1,5 +1,5 @@
 /**
- * Mutation Safety Envelope (MSE) — core validation helpers, v0.3.0.
+ * Mutation Safety Envelope (MSE) — core validation helpers, v0.4.0-dev.0.
  *
  * These functions implement the parts of the normative spec that are
  * mechanically checkable without a real provider: quote well-formedness
@@ -18,6 +18,8 @@
 import type {
   AcceptanceConstraint,
   AdmissionRefusal,
+  AdmissionCoverage,
+  AdmissionFailure,
   ComparableValue,
   CommitResult,
   Effect,
@@ -367,6 +369,63 @@ function assertUnitLocatorWellFormed(locator: UnitLocator, context: string): voi
   }
 }
 
+/** Checks coverage shape/correlation, not the truth of opaque binding evaluations. */
+export function assertAdmissionCoverageWellFormed(
+  quote: MutationQuote,
+  failures: AdmissionFailure[],
+  coverage: AdmissionCoverage[]
+): void {
+  if (!Array.isArray(coverage)) throw new MseViolation("Admission coverage is required.");
+  if (!Array.isArray(failures)) throw new MseViolation("Admission failures must be an array.");
+  const declared = new Set(quote.admissionRelations.map(r => r.relationId));
+  const failureIds = failures.map(failure => {
+    if (!failure || typeof failure.relationId !== "string" || failure.relationId.length === 0) {
+      throw new MseViolation("Admission failure has a malformed relation reference.");
+    }
+    return failure.relationId;
+  });
+  const failed = new Set(failureIds);
+  if (failed.size !== failures.length || [...failed].some(id => !declared.has(id))) {
+    throw new MseViolation("Duplicate or undeclared failure relation reference.");
+  }
+  const byId = new Map<string, AdmissionCoverage>();
+  for (const entry of coverage) {
+    if (!entry || !declared.has(entry.relationId) || byId.has(entry.relationId)) {
+      throw new MseViolation("Duplicate or undeclared coverage relation reference.");
+    }
+    if (!["PASSED", "FAILED", "DEFERRED"].includes(entry.status)) {
+      throw new MseViolation("Unknown coverage status; early stop is not exhaustive evaluation.");
+    }
+    const keys = entry.status === "DEFERRED" ? ["relationId", "status", "dependsOn"] : ["relationId", "status"];
+    if (Object.keys(entry).some(key => !keys.includes(key))) throw new MseViolation("Field in wrong coverage branch.");
+    if ((entry.status === "FAILED") !== failed.has(entry.relationId)) {
+      throw new MseViolation("Coverage status contradicts failures.");
+    }
+    if (entry.status === "DEFERRED") {
+      if (!Array.isArray(entry.dependsOn) || !entry.dependsOn.length ||
+          new Set(entry.dependsOn).size !== entry.dependsOn.length ||
+          entry.dependsOn.some(id => !declared.has(id) || id === entry.relationId)) {
+        throw new MseViolation("Deferred coverage requires unique declared dependencies, excluding itself.");
+      }
+    }
+    byId.set(entry.relationId, entry);
+  }
+  if (byId.size !== declared.size) throw new MseViolation("Admission coverage omits a declared relation.");
+  const checked = new Set<string>();
+  const visiting = new Set<string>();
+  const visit = (id: string): void => {
+    if (visiting.has(id)) throw new MseViolation("Deferred dependency cycle.");
+    if (checked.has(id)) return;
+    const entry = byId.get(id)!;
+    if (entry.status === "PASSED") throw new MseViolation("Deferred dependency must lead to a failed relation, not PASSED.");
+    visiting.add(id);
+    if (entry.status === "DEFERRED") entry.dependsOn.forEach(visit);
+    visiting.delete(id);
+    checked.add(id);
+  };
+  coverage.filter(e => e.status === "DEFERRED").forEach(e => visit(e.relationId));
+}
+
 /**
  * Validates a pre-dispatch AdmissionRefusal against the quote and proposal it
  * claims to describe. This rejects structurally impossible COMPLETE claims,
@@ -398,6 +457,8 @@ export function assertAdmissionRefusalWellFormed(
   if (!Array.isArray(refusal.failures) || refusal.failures.length === 0) {
     throw new MseViolation(`AdmissionRefusal MUST contain at least one failed relation.`);
   }
+
+  assertAdmissionCoverageWellFormed(quote, refusal.failures, refusal.coverage);
 
   const relations = new Map(quote.admissionRelations.map((relation) => [relation.relationId, relation]));
   const quotedLocators = new Set(quote.units.map((unit) => unitLocatorKey(unit.unitLocator)));

@@ -83,5 +83,24 @@ npm install
 npm test
 ```
 
-The v0.3.0 candidate currently runs 142 tests. The untouched v0.2.0 base ran
-102; the older 84-test count in historical documentation was stale.
+`npm test` runs 175 current-contract tests. The separate
+`npm run test:baseline` command runs 2 characterization cases against the
+recorded v0.3.0 core; those 2 are not included in the 175. A full verification
+therefore runs and passes 177 test cases across two invocations. Before this
+branch, the recorded v0.3.0 baseline suite ran 142 tests. The untouched v0.2.0
+base ran 102; the older 84-test count in historical documentation was stale.
+
+
+## Request reporting regression
+
+`request-reporting.test.ts` uses a separate merchant batch binding, preserving
+single-order retail invariants. It tests all-independent failure aggregation,
+authorized union repair, dependency deferral, mixed outcomes, and adversarial
+coverage. Schema tests reject shape defects; runtime tests reject cross-reference
+and failure/coverage contradictions that standard JSON Schema cannot express.
+Binding trace comparisons expose dishonest PASSED/DEFERRED claims that neither
+structural layer can disprove.
+
+Run `node scripts/reproduce-v0.3.mjs` for the two historical characterization
+cases against the exact recorded base core. `test/baseline/*.case.ts` deliberately
+runs only there and is excluded from the current TypeScript API build.

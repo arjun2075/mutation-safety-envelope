@@ -272,23 +272,22 @@ describe("admission witness honesty and scope", () => {
     ).toThrow(/duplicate or contradictory/);
   });
 
-  it("fails closed with UNAVAILABLE when a quote declares a relation but no evaluator exists", () => {
+  it("fails closed without inventing a failure when no evaluator exists", () => {
     const state = orderState();
     const provider = new ReferenceProvider(createRetailQuoter(() => state));
     const quote = provider.quote(
       proposal("no-evaluator", [{ unitKey: "delivery", operation: "CANCEL" }])
     );
     provider.setSnapshot(quote.target, retailSnapshot(state));
-    const witness = admissionFailures(
-      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
-    )[0].witness;
-    expect(witness).toEqual({ disposition: "UNAVAILABLE" });
+    expect(() => provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] }))
+      .toThrow(/require an evaluator/);
   });
 
   it("preserves PARTIAL as insufficient rather than advertising local repair", () => {
     const current = { value: orderState() };
     const { provider, syncSnapshot, dispatchCount } = configuredProvider(current, () => ({
       stateRef: { orderVersion: 1 },
+      coverage: [{ relationId: "retail:delivery_cancel_requires_goods_cancel", status: "FAILED" }],
       failures: [
         {
           relationId: "retail:delivery_cancel_requires_goods_cancel",
@@ -320,6 +319,7 @@ describe("admission witness honesty and scope", () => {
     const { provider, syncSnapshot, dispatchCount } = configuredProvider(
       current,
       () => ({
+        coverage: [{ relationId: "retail:delivery_cancel_requires_goods_cancel", status: "FAILED" }],
         failures: [
           {
             relationId: "retail:delivery_cancel_requires_goods_cancel",
@@ -372,6 +372,7 @@ describe("admission witness honesty and scope", () => {
   ] as const)("rejects a COMPLETE witness with %s", (_label, requirements) => {
     const current = { value: orderState() };
     const { provider, syncSnapshot } = configuredProvider(current, () => ({
+      coverage: [{ relationId: "retail:delivery_cancel_requires_goods_cancel", status: "FAILED" }],
       failures: [
         {
           relationId: "retail:delivery_cancel_requires_goods_cancel",
@@ -425,6 +426,7 @@ describe("repair lifecycle, safety checks, and non-atomic execution", () => {
           // that goods_2 was dishonestly omitted from the COMPLETE list.
           return {
             stateRef: { orderVersion: current.value.version },
+            coverage: [{ relationId: "retail:delivery_cancel_requires_goods_cancel", status: "FAILED" }],
             failures: [
               {
                 relationId: "retail:delivery_cancel_requires_goods_cancel",
