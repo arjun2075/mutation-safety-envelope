@@ -1,7 +1,7 @@
 # Request reporting: verification and two audit passes
 
 Base `main`: `b39cc8f9cb599f2550dc177a98f9f26eeae1d3b1`.
-Local feature branch: `codex/request-admission-reporting`.
+Local feature branch: `request-admission-reporting`.
 Audit date: 2026-09-16. These are self-review passes, not independent
 external certification. The reviewed branch may be committed and pushed for
 review; no PR, tags, releases, or external discussion posts were created.

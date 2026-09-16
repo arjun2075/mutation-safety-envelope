@@ -1,6 +1,6 @@
 # UCP #799 update — UNSENT
 
-Local review draft for `codex/request-admission-reporting`, based on
+Local review draft for `request-admission-reporting`, based on
 `b39cc8f9cb599f2550dc177a98f9f26eeae1d3b1`. Nothing has been posted.
 The branch URLs resolve after the authorized review-branch push. Before sending,
 replace them with immutable commit links and rerun verification if anything changes.
@@ -50,10 +50,10 @@ PASSED or DEFERRED claims. There is no general bound on repair round trips under
 state changes or newly activated dependencies. Witnesses grant neither authority
 nor atomic execution: a repaired request can still have mixed per-unit outcomes.
 
-Evidence: [base reproduction](https://github.com/arjun2075/mutation-safety-envelope/blob/codex/request-admission-reporting/test/baseline/request-reporting.case.ts),
-[request-level cases](https://github.com/arjun2075/mutation-safety-envelope/blob/codex/request-admission-reporting/test/request-reporting.test.ts),
-[normative decision](https://github.com/arjun2075/mutation-safety-envelope/blob/codex/request-admission-reporting/docs/request-reporting-design.md),
-and [two audit passes and verification](https://github.com/arjun2075/mutation-safety-envelope/blob/codex/request-admission-reporting/docs/request-reporting-audit.md).
+Evidence: [base reproduction](https://github.com/arjun2075/mutation-safety-envelope/blob/request-admission-reporting/test/baseline/request-reporting.case.ts),
+[request-level cases](https://github.com/arjun2075/mutation-safety-envelope/blob/request-admission-reporting/test/request-reporting.test.ts),
+[normative decision](https://github.com/arjun2075/mutation-safety-envelope/blob/request-admission-reporting/docs/request-reporting-design.md),
+and [two audit passes and verification](https://github.com/arjun2075/mutation-safety-envelope/blob/request-admission-reporting/docs/request-reporting-audit.md).
 191 current-contract tests and two separately run base-characterization cases
 pass (193 total across the two invocations), as do build and strict schema
 validation. This is proposed MSE work informed by your observation,

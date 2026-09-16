@@ -1,7 +1,7 @@
 # Request-level admission reporting decision
 
 Base: `main` at `b39cc8f9cb599f2550dc177a98f9f26eeae1d3b1`.
-Branch: `codex/request-admission-reporting`. No applicable AGENTS.md was found.
+Branch: `request-admission-reporting`. No applicable AGENTS.md was found.
 
 ## Evidence before contract edits
 
