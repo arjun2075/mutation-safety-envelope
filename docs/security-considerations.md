@@ -55,6 +55,18 @@ If dispatch may have occurred, returning `ADMISSION_REFUSED` would falsely
 promise no mutation. The provider MUST instead preserve per-unit determinacy
 and report `INDETERMINATE` plus reconciliation where the outcome is unknown.
 
+## 1c. Prior-transition satisfaction depends on truthful finality
+
+A `PRIOR_FINAL_TRANSITION` satisfaction record is safe only when the binding's
+state source exposes completion after the cited transition is final. For a
+monotonic terminal transition, a stale read sees older state and rejects, so it
+fails closed. A source that marks a submitted or provisional transition done
+can instead admit a request even if that transition later fails. Providers
+MUST document read consistency and finality, and binding trace conformance MUST
+verify the cited transition reference, operation, participant, and finalization
+time. Core validation cannot prove opaque history truthful. This evidence does
+not create a distributed lock or close the general check-to-dispatch gap.
+
 ## 2. Fail-closed constraint evaluation is a security property, not just a correctness one
 
 §3.2 of the normative spec requires `AcceptanceConstraint` evaluation to

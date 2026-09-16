@@ -17,10 +17,12 @@
 
 import type {
   AcceptanceConstraint,
+  AdmissionReport,
   AdmissionRefusal,
   AdmissionCoverage,
   AdmissionFailure,
   ComparableValue,
+  CommitResponse,
   CommitResult,
   Effect,
   MutationQuote,
@@ -320,6 +322,11 @@ export function assertQuoteUnitsWellFormed(quote: MutationQuote): void {
     if (!relation.scopeRef) {
       throw new MseViolation(`Admission relation "${relation.relationId}" has no scopeRef.`);
     }
+    if (relation.passEvidence !== undefined && relation.passEvidence !== "REQUIRED") {
+      throw new MseViolation(
+        `Admission relation "${relation.relationId}" has an unknown passEvidence policy.`
+      );
+    }
     if (!Array.isArray(relation.triggerUnitRefs) || relation.triggerUnitRefs.length === 0) {
       throw new MseViolation(
         `Admission relation "${relation.relationId}" MUST name at least one triggerUnitRef.`
@@ -369,6 +376,12 @@ function assertUnitLocatorWellFormed(locator: UnitLocator, context: string): voi
   }
 }
 
+function isIsoDateTime(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
+    !Number.isNaN(Date.parse(value));
+}
+
 /** Checks coverage shape/correlation, not the truth of opaque binding evaluations. */
 export function assertAdmissionCoverageWellFormed(
   quote: MutationQuote,
@@ -396,7 +409,11 @@ export function assertAdmissionCoverageWellFormed(
     if (!["PASSED", "FAILED", "DEFERRED"].includes(entry.status)) {
       throw new MseViolation("Unknown coverage status; early stop is not exhaustive evaluation.");
     }
-    const keys = entry.status === "DEFERRED" ? ["relationId", "status", "dependsOn"] : ["relationId", "status"];
+    const keys = entry.status === "DEFERRED"
+      ? ["relationId", "status", "dependsOn"]
+      : entry.status === "PASSED"
+        ? ["relationId", "status", "satisfactions"]
+        : ["relationId", "status"];
     if (Object.keys(entry).some(key => !keys.includes(key))) throw new MseViolation("Field in wrong coverage branch.");
     if ((entry.status === "FAILED") !== failed.has(entry.relationId)) {
       throw new MseViolation("Coverage status contradicts failures.");
@@ -406,6 +423,71 @@ export function assertAdmissionCoverageWellFormed(
           new Set(entry.dependsOn).size !== entry.dependsOn.length ||
           entry.dependsOn.some(id => !declared.has(id) || id === entry.relationId)) {
         throw new MseViolation("Deferred coverage requires unique declared dependencies, excluding itself.");
+      }
+    }
+    if (entry.status === "PASSED") {
+      const relation = quote.admissionRelations.find(r => r.relationId === entry.relationId)!;
+      if (relation.passEvidence === "REQUIRED" &&
+          (!Array.isArray(entry.satisfactions) || entry.satisfactions.length === 0)) {
+        throw new MseViolation(
+          `PASSED coverage for relation "${entry.relationId}" requires satisfaction evidence.`
+        );
+      }
+      if (entry.satisfactions !== undefined) {
+        if (!Array.isArray(entry.satisfactions) || entry.satisfactions.length === 0) {
+          throw new MseViolation("Satisfaction evidence, when present, must be non-empty.");
+        }
+        const seenSatisfactionUnits = new Set<string>();
+        for (const satisfaction of entry.satisfactions) {
+          if (!satisfaction || typeof satisfaction !== "object" ||
+              !Object.prototype.hasOwnProperty.call(satisfaction, "transition")) {
+            throw new MseViolation("Admission satisfaction has no transition.");
+          }
+          let participantKey: string;
+          if (satisfaction.source === "CURRENT_REQUEST") {
+            const satisfactionKeys = ["source", "unitRef", "transition"];
+            if (Object.keys(satisfaction).some(key => !satisfactionKeys.includes(key)) ||
+                typeof satisfaction.unitRef !== "string" || satisfaction.unitRef.length === 0) {
+              throw new MseViolation("Malformed current-request satisfaction evidence.");
+            }
+            const unit = quote.units.find(candidate => candidate.unitRef === satisfaction.unitRef);
+            if (!unit || unit.unitLocator.scopeRef !== relation.scopeRef) {
+              throw new MseViolation("Current-request satisfaction references an unrelated unit.");
+            }
+            if (JSON.stringify(unit.transition) !== JSON.stringify(satisfaction.transition)) {
+              throw new MseViolation("Current-request satisfaction transition contradicts its quoted unit.");
+            }
+            participantKey = unitLocatorKey(unit.unitLocator);
+          } else if (satisfaction.source === "PRIOR_FINAL_TRANSITION") {
+            const satisfactionKeys = [
+              "source", "unitLocator", "transition", "transitionRef", "finalizedAt",
+            ];
+            if (Object.keys(satisfaction).some(key => !satisfactionKeys.includes(key))) {
+              throw new MseViolation("Field in wrong prior-final satisfaction branch.");
+            }
+            assertUnitLocatorWellFormed(
+              satisfaction.unitLocator,
+              `Admission satisfaction for relation "${entry.relationId}"`
+            );
+            if (satisfaction.unitLocator.scopeRef !== relation.scopeRef) {
+              throw new MseViolation("Prior-final satisfaction references an unrelated unit.");
+            }
+            if (typeof satisfaction.transitionRef !== "string" ||
+                satisfaction.transitionRef.length === 0) {
+              throw new MseViolation("Prior-final satisfaction requires a transitionRef.");
+            }
+            if (!isIsoDateTime(satisfaction.finalizedAt)) {
+              throw new MseViolation("Prior-final satisfaction finalizedAt MUST be an ISO 8601 timestamp.");
+            }
+            participantKey = unitLocatorKey(satisfaction.unitLocator);
+          } else {
+            throw new MseViolation("Unknown admission satisfaction source.");
+          }
+          if (seenSatisfactionUnits.has(participantKey)) {
+            throw new MseViolation("Duplicate satisfaction evidence for one participating unit.");
+          }
+          seenSatisfactionUnits.add(participantKey);
+        }
       }
     }
     byId.set(entry.relationId, entry);
@@ -426,6 +508,28 @@ export function assertAdmissionCoverageWellFormed(
   coverage.filter(e => e.status === "DEFERRED").forEach(e => visit(e.relationId));
 }
 
+/** Validates shared admission metadata and coverage on either response path. */
+export function assertAdmissionReportWellFormed(
+  quote: MutationQuote,
+  proposal: MutationProposal,
+  report: AdmissionReport
+): void {
+  if (report.quoteId !== quote.quoteId) {
+    throw new MseViolation(
+      `AdmissionReport quoteId "${report.quoteId}" does not match evaluated quote "${quote.quoteId}".`
+    );
+  }
+  if (report.proposalId !== proposal.proposalId) {
+    throw new MseViolation(
+      `AdmissionReport proposalId "${report.proposalId}" does not match evaluated proposal "${proposal.proposalId}".`
+    );
+  }
+  if (!isIsoDateTime(report.evaluatedAt)) {
+    throw new MseViolation(`AdmissionReport evaluatedAt MUST be an ISO 8601 timestamp.`);
+  }
+  assertAdmissionCoverageWellFormed(quote, report.failures, report.coverage);
+}
+
 /**
  * Validates a pre-dispatch AdmissionRefusal against the quote and proposal it
  * claims to describe. This rejects structurally impossible COMPLETE claims,
@@ -439,27 +543,10 @@ export function assertAdmissionRefusalWellFormed(
   proposal: MutationProposal,
   refusal: AdmissionRefusal
 ): void {
-  if (refusal.quoteId !== quote.quoteId) {
-    throw new MseViolation(
-      `AdmissionRefusal quoteId "${refusal.quoteId}" does not match evaluated quote ` +
-        `"${quote.quoteId}".`
-    );
-  }
-  if (refusal.proposalId !== proposal.proposalId) {
-    throw new MseViolation(
-      `AdmissionRefusal proposalId "${refusal.proposalId}" does not match evaluated proposal ` +
-        `"${proposal.proposalId}".`
-    );
-  }
-  if (Number.isNaN(Date.parse(refusal.evaluatedAt))) {
-    throw new MseViolation(`AdmissionRefusal evaluatedAt MUST be an ISO 8601 timestamp.`);
-  }
+  assertAdmissionReportWellFormed(quote, proposal, refusal);
   if (!Array.isArray(refusal.failures) || refusal.failures.length === 0) {
     throw new MseViolation(`AdmissionRefusal MUST contain at least one failed relation.`);
   }
-
-  assertAdmissionCoverageWellFormed(quote, refusal.failures, refusal.coverage);
-
   const relations = new Map(quote.admissionRelations.map((relation) => [relation.relationId, relation]));
   const quotedLocators = new Set(quote.units.map((unit) => unitLocatorKey(unit.unitLocator)));
   const seenFailures = new Set<string>();
@@ -545,6 +632,38 @@ export function assertAdmissionRefusalWellFormed(
       }
     }
   }
+}
+
+/** Validates the admission/commit response split against its quote context. */
+export function assertCommitResponseWellFormed(
+  quote: MutationQuote,
+  proposal: MutationProposal,
+  response: CommitResponse
+): void {
+  if (!response || typeof response !== "object") {
+    throw new MseViolation("CommitResponse is required.");
+  }
+  if (response.kind === "ADMISSION_REFUSED") {
+    if (!response.admissionRefusal) {
+      throw new MseViolation("ADMISSION_REFUSED requires an admissionRefusal.");
+    }
+    assertAdmissionRefusalWellFormed(quote, proposal, response.admissionRefusal);
+    return;
+  }
+  if (response.kind !== "COMMIT_RESULT") {
+    throw new MseViolation("Unknown CommitResponse kind.");
+  }
+  if (!response.admissionReport) {
+    throw new MseViolation("COMMIT_RESULT requires an admissionReport.");
+  }
+  assertAdmissionReportWellFormed(quote, proposal, response.admissionReport);
+  if (response.admissionReport.failures.length > 0) {
+    throw new MseViolation("COMMIT_RESULT admissionReport MUST NOT contain failures.");
+  }
+  if (!response.commitResult || response.commitResult.quoteId !== quote.quoteId) {
+    throw new MseViolation("COMMIT_RESULT does not correlate to the evaluated quote.");
+  }
+  assertCommitResultCoversAllUnits(quote, response.commitResult);
 }
 
 /**

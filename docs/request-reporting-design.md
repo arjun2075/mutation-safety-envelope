@@ -31,7 +31,8 @@ after the working contract changes. It does not emulate the old validator.
    PASSED, FAILED, or DEFERRED. Only DEFERRED carries nonempty `dependsOn`
    relation IDs. FAILED entries correspond exactly to failures. Omitted entries
    (including early stop) are invalid; there is no exhaustive boolean to trust.
-   PASSED means evaluated with no failure, including evaluated inapplicability.
+   PASSED means evaluated with no failure. A relation declaring required pass
+   evidence must also identify the participating satisfactions.
 4. Coverage describes one admission evaluation pass of one quoted request at
    its evaluated binding state, not all future proposals or a locked snapshot.
    Independently evaluable relations MUST be evaluated in that pass. A deferred
@@ -47,16 +48,35 @@ after the working contract changes. It does not emulate the old validator.
 No generic workflow language or domain vocabulary is added to core. The
 reference hook must supply coverage even on a successful check. A missing hook
 or malformed/incomplete coverage throws before dispatch; it cannot fabricate
-failed relations with UNAVAILABLE witnesses. COMMIT_RESULT remains unchanged:
-quote-level rejection can occur before admission, so that branch alone does
-not assert admission was performed.
+failed relations with UNAVAILABLE witnesses. `CommitResult` remains unchanged,
+but `COMMIT_RESULT` now carries a separate required `admissionReport`, making
+successful evaluation reader-visible.
+
+## Pass-satisfaction and successful-path correction
+
+The retail delivery gates declare `passEvidence: REQUIRED`. Their PASSED
+coverage carries a non-empty discriminated satisfaction list. A
+`CURRENT_REQUEST` entry cites a quote-local `unitRef` and opaque transition; a
+`PRIOR_FINAL_TRANSITION` entry cites the existing cross-quote `UnitLocator`,
+opaque transition, stable transition reference, and `finalizedAt`. Both sources
+may occur in one relation. No `NOT_APPLICABLE` status was added: a prior final
+cancellation or redemption satisfies the gate.
+
+Core validates source-exclusive fields, timestamps, scope/current-quote
+correlation, and duplicate participants. The retail binding alone interprets
+CANCEL/REDEEM and verifies historical truth. Only FINAL history qualifies.
+Stale reads of monotonic final state fail closed by rejecting; premature
+completion reporting can pass unsafely, so this narrows but does not solve the
+general snapshot/check-to-dispatch problem.
 
 ## Compatibility
 
 Recommend and use **0.4.0-dev.0**, after the executable decision gate, because
-required refusal coverage changes the closed wire schema, public TypeScript
-shape, and provider hook contract. This is a breaking pre-1.0 minor development
-revision, not a published release. v0.3.0 tags and historical documents remain
-unchanged. Migration: return actual coverage for every declared relation;
-provide dependencies for deferred evaluation; validate failure correspondence;
-never derive PASSED merely from absence in a potentially incomplete failure list.
+required report coverage, the PASSED satisfaction union, relation evidence
+declarations, and required successful-path `admissionReport` change the closed
+wire schema, public TypeScript shape, and provider hook contract. This is a
+breaking pre-1.0 minor development revision, not a published release. v0.3.0
+tags and historical documents remain unchanged. Migration: return actual
+coverage for every declared relation; provide dependencies for deferred
+evaluation; provide binding-required pass evidence; validate failure
+correspondence; never derive PASSED merely from an incomplete failure list.

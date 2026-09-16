@@ -38,12 +38,18 @@ A provider claiming MSE v0.4.0-dev.0 conformance MUST:
    witness is sufficient only for its relation and MUST NOT authorize
    added transitions or bypass a new quote. Admission evaluation itself
    MUST be observational and MUST NOT dispatch a quoted transition.
-   Refusals MUST cover every declaration with PASSED, FAILED, or genuinely
+   Both response paths MUST expose an admission report covering every
+   declaration with PASSED, FAILED, or genuinely
    repair-dependent DEFERRED (spec §3.2). Failures and FAILED coverage entries
    MUST correspond exactly. Provider-side traces must substantiate evaluation
    and deferral; schema validity alone does not prove exhaustive reporting.
    Early stop and missing evaluators MUST fail before dispatch, without
-   inventing a failure witness.
+   inventing a failure witness. A relation declaring `passEvidence: REQUIRED`
+   MUST have non-empty PASSED satisfaction records. Current-request records
+   must correlate to quoted units; prior records must cite a stable transition
+   reference and ISO finalization time. Only binding-confirmed final history
+   qualifies. Binding trace conformance must catch well-shaped false history
+   that domain-blind core validation cannot prove false.
 6. Produce a `CommitResult.unitResults` entry for **every** unit in the
    quote — no silent omission, no duplicates, no unknown `unitRef` (spec
    §1b) — each giving exactly one of `APPLIED` / `REFUSED` /

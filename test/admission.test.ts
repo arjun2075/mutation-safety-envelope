@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { ReferenceProvider } from "../src/core/reference-provider";
 import {
+  assertAdmissionCoverageWellFormed,
   assertAdmissionRefusalWellFormed,
+  assertAdmissionReportWellFormed,
+  assertCommitResponseWellFormed,
   assertCommitResultCoversAllUnits,
   assertQuoteUnitsWellFormed,
   assertReconciliationContractHonored,
@@ -9,6 +12,7 @@ import {
 } from "../src/core/validate";
 import type {
   AdmissionFailure,
+  AdmissionReport,
   CommitResult,
   MutationProposal,
   MutationQuote,
@@ -16,6 +20,7 @@ import type {
 } from "../src/core/types";
 import {
   amendRetailProposal,
+  assertRetailAdmissionTrace,
   createRetailAdmissionEvaluator,
   createRetailQuoter,
   isRetailProposalAuthorized,
@@ -120,7 +125,18 @@ describe("retail cross-unit admission — provider-reported UCP #799 gates", () 
 
   it("excludes an already-cancelled goods unit from the complete witness", () => {
     const current = {
-      value: orderState({ goods_1: { kind: "GOODS", state: "CANCELLED" } }),
+      value: orderState({
+        goods_1: {
+          kind: "GOODS",
+          state: "CANCELLED",
+          transitionHistory: [{
+            status: "FINAL",
+            transitionRef: "cancel-goods-1",
+            transition: { unitKey: "goods_1", operation: "CANCEL" },
+            finalizedAt: "2026-09-01T10:00:00Z",
+          }],
+        },
+      }),
     };
     const { provider, syncSnapshot } = configuredProvider(current);
     const quote = provider.quote(
@@ -202,9 +218,20 @@ describe("retail cross-unit admission — provider-reported UCP #799 gates", () 
     });
   });
 
-  it("does not fire the redemption relation after delivery leaves committed state", () => {
+  it("passes redemption from a prior final delivery redemption", () => {
     const current = {
-      value: orderState({ delivery: { kind: "DELIVERY", state: "REDEEMED" } }),
+      value: orderState({
+        delivery: {
+          kind: "DELIVERY",
+          state: "REDEEMED",
+          transitionHistory: [{
+            status: "FINAL",
+            transitionRef: "redeem-delivery-1",
+            transition: { unitKey: "delivery", operation: "REDEEM" },
+            finalizedAt: "2026-09-01T11:00:00Z",
+          }],
+        },
+      }),
     };
     const { provider, syncSnapshot } = configuredProvider(current);
     const quote = provider.quote(
@@ -212,10 +239,233 @@ describe("retail cross-unit admission — provider-reported UCP #799 gates", () 
     );
     syncSnapshot();
 
-    const result = commitResult(
-      provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })
-    );
+    const response = provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] });
+    const result = commitResult(response);
     expect(result.unitResults[0].outcome).toBe("APPLIED");
+    if (response.kind !== "COMMIT_RESULT") throw new Error("Expected COMMIT_RESULT");
+    expect(response.admissionReport.coverage[0]).toMatchObject({
+      status: "PASSED",
+      satisfactions: [{
+        source: "PRIOR_FINAL_TRANSITION",
+        transitionRef: "redeem-delivery-1",
+      }],
+    });
+  });
+});
+
+describe("wire-visible retail pass satisfaction", () => {
+  const finalTransition = (unitKey: string, operation: "CANCEL" | "REDEEM", ref: string) => ({
+    status: "FINAL" as const,
+    transitionRef: ref,
+    transition: { unitKey, operation },
+    finalizedAt: "2026-09-01T12:00:00Z",
+  });
+
+  function admitted(current: { value: RetailOrderState }, submitted: MutationProposal) {
+    const { provider, syncSnapshot } = configuredProvider(current);
+    const quote = provider.quote(submitted);
+    syncSnapshot();
+    const response = provider.commit(
+      { quoteId: quote.quoteId, acceptanceConstraints: [] },
+      new Date("2026-09-02T00:00:00Z")
+    );
+    expect(response.kind).toBe("COMMIT_RESULT");
+    if (response.kind !== "COMMIT_RESULT") throw new Error("Expected COMMIT_RESULT");
+    expect(() => assertAdmissionReportWellFormed(quote, submitted, response.admissionReport))
+      .not.toThrow();
+    expect(() => assertCommitResponseWellFormed(quote, submitted, response)).not.toThrow();
+    return { quote, response };
+  }
+
+  it("reports delivery cancellation satisfied entirely by current-request goods cancellations", () => {
+    const current = { value: orderState() };
+    const submitted = proposal("current-cancel", [
+      { unitKey: "delivery", operation: "CANCEL" },
+      { unitKey: "goods_1", operation: "CANCEL" },
+      { unitKey: "goods_2", operation: "CANCEL" },
+    ]);
+    const { quote, response } = admitted(current, submitted);
+    const passed = response.admissionReport.coverage[0];
+    expect(passed.status).toBe("PASSED");
+    if (passed.status !== "PASSED") throw new Error("Expected PASSED");
+    expect(passed.satisfactions?.map(item => item.source)).toEqual([
+      "CURRENT_REQUEST", "CURRENT_REQUEST",
+    ]);
+    const reordered = structuredClone(response.admissionReport);
+    const reorderedPassed = reordered.coverage[0];
+    if (reorderedPassed.status !== "PASSED" || !reorderedPassed.satisfactions) {
+      throw new Error("Expected satisfaction evidence");
+    }
+    reorderedPassed.satisfactions.reverse();
+    expect(() => assertRetailAdmissionTrace(submitted, quote, reordered, current.value)).not.toThrow();
+  });
+
+  it("reports delivery cancellation satisfied entirely by prior final goods cancellations", () => {
+    const current = { value: orderState({
+      goods_1: {
+        kind: "GOODS", state: "CANCELLED",
+        transitionHistory: [finalTransition("goods_1", "CANCEL", "prior-cancel-1")],
+      },
+      goods_2: {
+        kind: "GOODS", state: "CANCELLED",
+        transitionHistory: [finalTransition("goods_2", "CANCEL", "prior-cancel-2")],
+      },
+    }) };
+    const submitted = proposal("prior-cancel", [{ unitKey: "delivery", operation: "CANCEL" }]);
+    const { response } = admitted(current, submitted);
+    const passed = response.admissionReport.coverage[0];
+    if (passed.status !== "PASSED") throw new Error("Expected PASSED");
+    expect(passed.satisfactions?.map(item => item.source)).toEqual([
+      "PRIOR_FINAL_TRANSITION", "PRIOR_FINAL_TRANSITION",
+    ]);
+  });
+
+  it("reports mixed current-request and prior-final cancellation satisfaction", () => {
+    const current = { value: orderState({
+      goods_2: {
+        kind: "GOODS", state: "CANCELLED",
+        transitionHistory: [finalTransition("goods_2", "CANCEL", "prior-cancel-2")],
+      },
+    }) };
+    const submitted = proposal("mixed-cancel", [
+      { unitKey: "delivery", operation: "CANCEL" },
+      { unitKey: "goods_1", operation: "CANCEL" },
+    ]);
+    const { response } = admitted(current, submitted);
+    const passed = response.admissionReport.coverage[0];
+    if (passed.status !== "PASSED") throw new Error("Expected PASSED");
+    expect(new Set(passed.satisfactions?.map(item => item.source))).toEqual(new Set([
+      "CURRENT_REQUEST", "PRIOR_FINAL_TRANSITION",
+    ]));
+  });
+
+  it("reports delivery redemption in the current request as goods-redemption satisfaction", () => {
+    const current = { value: orderState() };
+    const submitted = proposal("current-redeem", [
+      { unitKey: "goods_1", operation: "REDEEM" },
+      { unitKey: "delivery", operation: "REDEEM" },
+    ]);
+    const { response } = admitted(current, submitted);
+    expect(response.admissionReport.coverage[0]).toMatchObject({
+      status: "PASSED",
+      satisfactions: [{ source: "CURRENT_REQUEST" }],
+    });
+  });
+
+  it.each(["SUBMITTED", "PENDING", "FAILED"] as const)(
+    "does not accept a prior %s delivery redemption as final",
+    (status) => {
+      const current = { value: orderState({
+        delivery: {
+          kind: "DELIVERY",
+          state: status === "FAILED" ? "COMMITTED" : "REDEEMED",
+          transitionHistory: [{
+            status,
+            transitionRef: `redeem-${status.toLowerCase()}`,
+            transition: { unitKey: "delivery", operation: "REDEEM" },
+          }],
+        },
+      }) };
+      const { provider, syncSnapshot } = configuredProvider(current);
+      const quote = provider.quote(proposal(`nonfinal-${status}`, [
+        { unitKey: "goods_1", operation: "REDEEM" },
+      ]));
+      syncSnapshot();
+      expect(provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] }).kind)
+        .toBe("ADMISSION_REFUSED");
+    }
+  );
+
+  it("rejects duplicate and malformed prior-final satisfaction structurally", () => {
+    const current = { value: orderState({
+      delivery: {
+        kind: "DELIVERY", state: "REDEEMED",
+        transitionHistory: [finalTransition("delivery", "REDEEM", "prior-redeem")],
+      },
+    }) };
+    const submitted = proposal("bad-evidence", [{ unitKey: "goods_1", operation: "REDEEM" }]);
+    const { quote, response } = admitted(current, submitted);
+    const duplicate = structuredClone(response.admissionReport.coverage);
+    const entry = duplicate[0];
+    if (entry.status !== "PASSED" || !entry.satisfactions) throw new Error("Expected evidence");
+    entry.satisfactions.push(structuredClone(entry.satisfactions[0]));
+    expect(() => assertAdmissionCoverageWellFormed(quote, [], duplicate)).toThrow(/Duplicate/);
+
+    const missing = structuredClone(response.admissionReport.coverage) as unknown as Array<Record<string, unknown>>;
+    const satisfaction = (missing[0].satisfactions as Array<Record<string, unknown>>)[0];
+    delete satisfaction.transitionRef;
+    expect(() => assertAdmissionCoverageWellFormed(
+      quote, [], missing as unknown as AdmissionReport["coverage"]
+    )).toThrow(/transitionRef/);
+
+    const unrelated = structuredClone(response.admissionReport.coverage);
+    const unrelatedEntry = unrelated[0];
+    if (unrelatedEntry.status !== "PASSED" ||
+        unrelatedEntry.satisfactions?.[0].source !== "PRIOR_FINAL_TRANSITION") {
+      throw new Error("Expected prior evidence");
+    }
+    unrelatedEntry.satisfactions[0].unitLocator.scopeRef = "retail:another_order";
+    expect(() => assertAdmissionCoverageWellFormed(quote, [], unrelated)).toThrow(/unrelated/);
+  });
+
+  it("leaves semantic lies to retail trace conformance, including wrong unit or transition", () => {
+    const current = { value: orderState({
+      delivery: {
+        kind: "DELIVERY", state: "REDEEMED",
+        transitionHistory: [finalTransition("delivery", "REDEEM", "prior-redeem")],
+      },
+    }) };
+    const submitted = proposal("trace-evidence", [{ unitKey: "goods_1", operation: "REDEEM" }]);
+    const { quote, response } = admitted(current, submitted);
+    const wrongUnit = structuredClone(response.admissionReport);
+    const evidence = wrongUnit.coverage[0];
+    if (evidence.status !== "PASSED" || evidence.satisfactions?.[0].source !== "PRIOR_FINAL_TRANSITION") {
+      throw new Error("Expected prior evidence");
+    }
+    evidence.satisfactions[0].unitLocator.unitKey = "goods_2";
+    expect(() => assertAdmissionReportWellFormed(quote, submitted, wrongUnit)).not.toThrow();
+    expect(() => assertRetailAdmissionTrace(submitted, quote, wrongUnit, current.value)).toThrow();
+
+    const wrongTransition = structuredClone(response.admissionReport);
+    const wrong = wrongTransition.coverage[0];
+    if (wrong.status !== "PASSED" || wrong.satisfactions?.[0].source !== "PRIOR_FINAL_TRANSITION") {
+      throw new Error("Expected prior evidence");
+    }
+    wrong.satisfactions[0].transition = { unitKey: "delivery", operation: "CANCEL" };
+    expect(() => assertAdmissionReportWellFormed(quote, submitted, wrongTransition)).not.toThrow();
+    expect(() => assertRetailAdmissionTrace(submitted, quote, wrongTransition, current.value)).toThrow();
+  });
+
+  it("fails closed when a provider labels required unevaluated coverage PASSED", () => {
+    const current = { value: orderState() };
+    const { provider, syncSnapshot, dispatchCount } = configuredProvider(current, () => ({
+      failures: [],
+      coverage: [{
+        relationId: "retail:goods_redeem_requires_delivery_redeem",
+        status: "PASSED",
+      }],
+    }));
+    const quote = provider.quote(proposal("omitted-evaluation", [
+      { unitKey: "goods_1", operation: "REDEEM" },
+    ]));
+    syncSnapshot();
+    expect(() => provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] }))
+      .toThrow(/requires satisfaction evidence/);
+    expect(dispatchCount()).toBe(0);
+  });
+
+  it("runtime validation rejects a successful response with an omitted report", () => {
+    const current = { value: orderState() };
+    const submitted = proposal("runtime-omit", [
+      { unitKey: "goods_1", operation: "REDEEM" },
+      { unitKey: "delivery", operation: "REDEEM" },
+    ]);
+    const { quote, response } = admitted(current, submitted);
+    const malformed = structuredClone(response) as unknown as Record<string, unknown>;
+    delete malformed.admissionReport;
+    expect(() => assertCommitResponseWellFormed(
+      quote, submitted, malformed as unknown as ReturnType<ReferenceProvider["commit"]>
+    )).toThrow(/requires an admissionReport/);
   });
 });
 

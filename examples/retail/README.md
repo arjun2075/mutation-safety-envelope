@@ -28,23 +28,31 @@ systems. MSE does not model them; a retail profile that wants to expose them
 would define additional, retail-namespaced effect types (e.g.
 `retail:inventory_reservation_status`) without changing the core schema.
 
-## Cross-unit admission example (v0.3.0)
+## Cross-unit admission example (v0.4.0-dev.0)
 
 The executable binding in [`admission-policy.ts`](./admission-policy.ts)
 models two provider-reported gates from UCP Discussion #799. The behavior is
 attributed evidence; the MSE message shapes are proposed here for review.
 
-- Cancelling the separate delivery unit requires cancelling every goods unit
-  that is still active. Already-cancelled goods and cancellations already in
-  the proposal are excluded from the current missing set.
-- Redeeming goods requires delivery redemption while delivery remains in the
-  `COMMITTED` state. The gate stops firing after delivery leaves that state.
+- Cancelling the separate delivery unit requires every goods cancellation to
+  be included in the request or established by a prior final cancellation.
+- Redeeming goods requires delivery redemption in the request or a prior final
+  delivery redemption. Submitted, pending, provisional, or failed history is
+  insufficient even if a coarse resource state already looks completed.
 
 The quote declares only a stable, directional `REQUIRES_COINCLUSION`
 relation. The binding evaluates actual current order state immediately before
 dispatch. An admission refusal carries binding-scoped `unitLocator`s and
 explicit required transitions. The caller constructs a new proposal and gets
 a new quote; it never appends missing units to the old commit request.
+
+Both retail relations declare `passEvidence: REQUIRED`. Their `PASSED`
+coverage identifies each participating transition as `CURRENT_REQUEST` or
+`PRIOR_FINAL_TRANSITION`; the latter includes a stable transition reference
+and finalization timestamp. The same `AdmissionReport` is visible beside a
+successful `CommitResult`, so a prior-history pass is not indistinguishable
+from a gate that never ran. Retail trace conformance checks the opaque history;
+the domain-blind core checks only structure and correlation.
 
 The binding example also demonstrates the authorization boundary: a witness
 can describe a required transition that the caller is not permitted to make.

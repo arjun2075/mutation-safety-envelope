@@ -25,6 +25,16 @@ the reference validator accepted it. The executable exhaustive case returns
 all three failures together; their union can form one newly authorized proposal
 and new quote that passes admission under unchanged fixture state.
 
+Weston's
+[latest comment](https://github.com/Universal-Commerce-Protocol/ucp/discussions/799#discussioncomment-18469227)
+also exposed a successful-path gap: prior final redemption could satisfy a
+retail gate while leaving no reader-visible proof that the gate ran. PASSED
+coverage for the retail relations now carries current-request, prior-final, or
+mixed participating-unit satisfaction. Prior evidence includes stable
+transition correlation and finalization time; submitted, pending, or failed
+history does not qualify. The same admission report accompanies a successful
+commit response, remaining separate from per-unit commit results.
+
 The additional gap is caller-visible coverage. An omitted relation could have
 passed, been skipped, or depend on a prior repair. The local proposal adds one
 required coverage entry per declared relation: PASSED, FAILED, or DEFERRED with
@@ -44,8 +54,8 @@ Evidence: [base reproduction](https://github.com/arjun2075/mutation-safety-envel
 [request-level cases](https://github.com/arjun2075/mutation-safety-envelope/blob/codex/request-admission-reporting/test/request-reporting.test.ts),
 [normative decision](https://github.com/arjun2075/mutation-safety-envelope/blob/codex/request-admission-reporting/docs/request-reporting-design.md),
 and [two audit passes and verification](https://github.com/arjun2075/mutation-safety-envelope/blob/codex/request-admission-reporting/docs/request-reporting-audit.md).
-175 current-contract tests and two separately run base-characterization cases
-pass (177 total across the two invocations), as do build and strict schema
+191 current-contract tests and two separately run base-characterization cases
+pass (193 total across the two invocations), as do build and strict schema
 validation. This is proposed MSE work informed by your observation,
 not a claim that your provider implements this response shape or that UCP has
 adopted it.

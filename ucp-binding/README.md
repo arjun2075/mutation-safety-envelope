@@ -59,7 +59,10 @@ to carry `MutationProposal`/`MutationQuote`/`CommitRequest`/`CommitResult`
 payloads, validated against `/schema/mse-core.schema.json`. As of v0.3.0,
 `mse.commit` returns a discriminated response: a known pre-dispatch
 `ADMISSION_REFUSED` with a relation witness, or `COMMIT_RESULT` carrying
-one outcome per independently committing unit. A complete witness constructs
+one outcome per independently committing unit plus a separate admission
+report. A binding may require PASSED coverage to expose current-request or
+prior-final transition satisfaction; prior history needs binding-defined
+finality and trace verification. A complete witness constructs
 a new proposal and requires a new quote; it never adds an unquoted unit to
 the old commit request. An `INDETERMINATE` unit's `reconciliation` field
 would still need its `MACHINE_RESOLVABLE`/

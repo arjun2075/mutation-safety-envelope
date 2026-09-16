@@ -3,7 +3,9 @@
  * in UCP #799. This vocabulary is deliberately outside src/core.
  */
 import type {
+  AdmissionCoverage,
   AdmissionFailure,
+  AdmissionReport,
   AdmissionRelation,
   MutationProposal,
   MutationQuote,
@@ -26,7 +28,22 @@ export interface RetailChange {
 export interface RetailUnitState {
   kind: "GOODS" | "DELIVERY";
   state: "ACTIVE" | "CANCELLED" | "COMMITTED" | "REDEEMED";
+  transitionHistory?: RetailTransitionRecord[];
 }
+
+export type RetailTransitionRecord =
+  | {
+      status: "SUBMITTED" | "PENDING" | "FAILED";
+      transitionRef: string;
+      transition: RetailTransition;
+      finalizedAt?: never;
+    }
+  | {
+      status: "FINAL";
+      transitionRef: string;
+      transition: RetailTransition;
+      finalizedAt: string;
+    };
 
 export interface RetailOrderState {
   orderId: string;
@@ -181,6 +198,9 @@ export function createRetailQuoter(readState: RetailStateReader): Quoter {
         type: "REQUIRES_COINCLUSION",
         triggerUnitRefs: [unitRefByKey.get("delivery")!],
         scopeRef: scope,
+        ...(Object.values(state.units).some(unit => unit.kind === "GOODS")
+          ? { passEvidence: "REQUIRED" as const }
+          : {}),
       });
     }
 
@@ -196,6 +216,7 @@ export function createRetailQuoter(readState: RetailStateReader): Quoter {
         type: "REQUIRES_COINCLUSION",
         triggerUnitRefs: goodsRedeemRefs,
         scopeRef: scope,
+        passEvidence: "REQUIRED",
       });
     }
 
@@ -228,6 +249,32 @@ export function createRetailAdmissionEvaluator(readState: RetailStateReader): Ad
     const transitions = parseRetailChange(proposal.change).transitions;
     const transitionByUnit = new Map(transitions.map((transition) => [transition.unitKey, transition]));
     const failures: AdmissionFailure[] = [];
+    const coverage: AdmissionCoverage[] = [];
+
+    const currentSatisfaction = (unitKey: string, transition: RetailTransition) => {
+      const unit = quote.units.find(candidate => candidate.unitLocator.unitKey === unitKey);
+      if (!unit) throw new Error(`Current retail transition ${unitKey} is absent from its quote.`);
+      return {
+        source: "CURRENT_REQUEST" as const,
+        unitRef: unit.unitRef,
+        transition,
+      };
+    };
+    const priorFinalSatisfaction = (unitKey: string, operation: RetailOperation) => {
+      const record = state.units[unitKey]?.transitionHistory?.find(candidate =>
+        candidate.status === "FINAL" &&
+        candidate.transition.unitKey === unitKey &&
+        candidate.transition.operation === operation
+      );
+      if (!record || record.status !== "FINAL") return undefined;
+      return {
+        source: "PRIOR_FINAL_TRANSITION" as const,
+        unitLocator: locator(orderId, unitKey),
+        transition: record.transition,
+        transitionRef: record.transitionRef,
+        finalizedAt: record.finalizedAt,
+      };
+    };
 
     for (const relation of quote.admissionRelations) {
       if (relation.relationId !== CANCEL_RELATION && relation.relationId !== REDEEM_RELATION) {
@@ -235,28 +282,42 @@ export function createRetailAdmissionEvaluator(readState: RetailStateReader): Ad
       }
       if (relation.relationId === CANCEL_RELATION) {
         const requiredGoods = Object.entries(state.units)
-          .filter(([, unitState]) => unitState.kind === "GOODS" && unitState.state !== "CANCELLED")
+          .filter(([, unitState]) => unitState.kind === "GOODS")
           .map(([unitKey]) => unitKey);
-
-        const contradictory = requiredGoods.some((unitKey) => {
+        const satisfactions = [] as NonNullable<Extract<AdmissionCoverage, { status: "PASSED" }>["satisfactions"]>;
+        const missing: RequiredTransition[] = [];
+        let contradictory = false;
+        for (const unitKey of requiredGoods) {
           const included = transitionByUnit.get(unitKey);
-          return included !== undefined && included.operation !== "CANCEL";
-        });
+          if (included?.operation === "CANCEL") {
+            satisfactions.push(currentSatisfaction(unitKey, included));
+          } else if (included) {
+            contradictory = true;
+          } else {
+            const prior = priorFinalSatisfaction(unitKey, "CANCEL");
+            if (prior) satisfactions.push(prior);
+            else missing.push(requiredTransition(orderId, unitKey, "CANCEL"));
+          }
+        }
         if (contradictory) {
           failures.push({
             relationId: relation.relationId,
             witness: { disposition: "NOT_REPAIRABLE" },
           });
+          coverage.push({ relationId: relation.relationId, status: "FAILED" });
           continue;
         }
-
-        const missing = requiredGoods
-          .filter((unitKey) => transitionByUnit.get(unitKey)?.operation !== "CANCEL")
-          .map((unitKey) => requiredTransition(orderId, unitKey, "CANCEL"));
         if (missing.length > 0) {
           failures.push({
             relationId: relation.relationId,
             witness: { disposition: "COMPLETE", requiredTransitions: missing },
+          });
+          coverage.push({ relationId: relation.relationId, status: "FAILED" });
+        } else {
+          coverage.push({
+            relationId: relation.relationId,
+            status: "PASSED",
+            ...(satisfactions.length > 0 ? { satisfactions } : {}),
           });
         }
       }
@@ -268,17 +329,32 @@ export function createRetailAdmissionEvaluator(readState: RetailStateReader): Ad
             relationId: relation.relationId,
             witness: { disposition: "UNAVAILABLE" },
           });
+          coverage.push({ relationId: relation.relationId, status: "FAILED" });
           continue;
         }
-        if (delivery.state !== "COMMITTED") continue;
-
         const included = transitionByUnit.get("delivery");
         if (included && included.operation !== "REDEEM") {
           failures.push({
             relationId: relation.relationId,
             witness: { disposition: "NOT_REPAIRABLE" },
           });
-        } else if (!included) {
+          coverage.push({ relationId: relation.relationId, status: "FAILED" });
+        } else if (included) {
+          coverage.push({
+            relationId: relation.relationId,
+            status: "PASSED",
+            satisfactions: [currentSatisfaction("delivery", included)],
+          });
+        } else {
+          const prior = priorFinalSatisfaction("delivery", "REDEEM");
+          if (prior) {
+            coverage.push({
+              relationId: relation.relationId,
+              status: "PASSED",
+              satisfactions: [prior],
+            });
+            continue;
+          }
           failures.push({
             relationId: relation.relationId,
             witness: {
@@ -286,22 +362,40 @@ export function createRetailAdmissionEvaluator(readState: RetailStateReader): Ad
               requiredTransitions: [requiredTransition(orderId, "delivery", "REDEEM")],
             },
           });
+          coverage.push({ relationId: relation.relationId, status: "FAILED" });
         }
       }
     }
-
-    // Both supported rules above have actually been evaluated; absence of a
-    // failure here means this binding observed no failure, not early stopping.
-    const coverage = quote.admissionRelations.map(relation => ({
-      relationId: relation.relationId,
-      status: failures.some(f => f.relationId === relation.relationId)
-        ? "FAILED" as const : "PASSED" as const,
-    }));
     return { stateRef: { orderVersion: state.version }, failures, coverage };
   };
+}
+
+/**
+ * Retail trace conformance: unlike core validation, this re-evaluates the
+ * opaque retail history and therefore detects structurally valid false claims.
+ */
+export function assertRetailAdmissionTrace(
+  proposal: MutationProposal,
+  quote: MutationQuote,
+  report: AdmissionReport,
+  state: RetailOrderState
+): void {
+  const expected = createRetailAdmissionEvaluator(() => state)(proposal, quote, new Date(report.evaluatedAt));
+  const sortByJson = <T>(value: T[]) => [...value].sort((a, b) =>
+    JSON.stringify(a).localeCompare(JSON.stringify(b))
+  );
+  const normalizeCoverage = (value: AdmissionCoverage[]) => sortByJson(value.map(entry =>
+    entry.status === "PASSED" && entry.satisfactions
+      ? { ...entry, satisfactions: sortByJson(entry.satisfactions) }
+      : entry
+  ));
+  if (JSON.stringify(normalizeCoverage(report.coverage)) !==
+        JSON.stringify(normalizeCoverage(expected.coverage)) ||
+      JSON.stringify(sortByJson(report.failures)) !== JSON.stringify(sortByJson(expected.failures))) {
+    throw new Error("Admission report contradicts the retail binding evaluation trace.");
+  }
 }
 
 export function retailSnapshot(state: RetailOrderState): unknown {
   return { orderVersion: state.version };
 }
-

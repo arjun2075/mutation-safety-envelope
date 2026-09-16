@@ -225,3 +225,24 @@ binding. It does not resolve §8's genuinely shared-effect ownership problem,
 define a generic constraint language, make co-included units atomic, or prove
 that a distributed provider can close the check-to-dispatch gap without a
 binding-specific transaction/revalidation mechanism.
+
+---
+
+## 10. A PASSED relation hid how it was satisfied — **RESOLVED narrowly in v0.4.0-dev.0**
+
+**Ambiguity/falsification:** prior final delivery redemption or goods
+cancellation satisfied the reported retail gates, but PASSED coverage did not
+tell a reader whether a companion transition was in the request, had completed
+earlier, or the gate had never run.
+
+**Resolution:** relations may declare `passEvidence: REQUIRED`; their PASSED
+coverage then carries one or more source-discriminated satisfaction records.
+Current-request records correlate to quoted units. Prior-final records use the
+existing binding-scoped locator and cite transition correlation plus
+finalization time. Both sources may be mixed. The successful response carries
+the shared admission report separately from `CommitResult`.
+
+This does not prove opaque history truthful, define domain transition states,
+or close the general distributed check-to-dispatch gap. Those remain binding
+trace and consistency obligations. `NOT_APPLICABLE` was not added for prior
+completed transitions because those transitions satisfy these gates.

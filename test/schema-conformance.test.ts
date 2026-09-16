@@ -381,3 +381,59 @@ describe("v0.3.0 admission-message negative cases", () => {
     expect(validate(doc)).toBe(false);
   });
 });
+
+describe("v0.4.0-dev.0 admission report and satisfaction evidence", () => {
+  const success = {
+    kind: "COMMIT_RESULT",
+    admissionReport: {
+      quoteId: "q-pass",
+      proposalId: "p-pass",
+      evaluatedAt: "2026-09-16T20:00:00Z",
+      failures: [],
+      coverage: [{
+        relationId: "retail:gate",
+        status: "PASSED",
+        satisfactions: [{
+          source: "PRIOR_FINAL_TRANSITION",
+          unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+          transition: { operation: "REDEEM" },
+          transitionRef: "transition-42",
+          finalizedAt: "2026-09-16T19:00:00Z",
+        }],
+      }],
+    },
+    commitResult: {
+      quoteId: "q-pass",
+      unitResults: [{ unitRef: "goods", outcome: "APPLIED", committedEffects: [] }],
+    },
+  };
+
+  it("accepts a successful response with reader-facing prior-final satisfaction", () => {
+    expect(validate({ commitResponse: success })).toBe(true);
+  });
+
+  it("rejects a successful response that omits its admission report", () => {
+    const doc = structuredClone(success) as Partial<typeof success>;
+    delete doc.admissionReport;
+    expect(validate({ commitResponse: doc })).toBe(false);
+  });
+
+  it.each(["transitionRef", "finalizedAt"] as const)(
+    "rejects prior-final evidence missing %s",
+    (field) => {
+      const doc = structuredClone(success);
+      delete doc.admissionReport.coverage[0].satisfactions[0][field];
+      expect(validate({ commitResponse: doc })).toBe(false);
+    }
+  );
+
+  it("rejects malformed finalization time and incompatible source fields", () => {
+    const malformed = structuredClone(success);
+    malformed.admissionReport.coverage[0].satisfactions[0].finalizedAt = "yesterday";
+    expect(validate({ commitResponse: malformed })).toBe(false);
+
+    const incompatible = structuredClone(success);
+    Object.assign(incompatible.admissionReport.coverage[0].satisfactions[0], { unitRef: "delivery" });
+    expect(validate({ commitResponse: incompatible })).toBe(false);
+  });
+});

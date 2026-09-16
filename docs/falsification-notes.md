@@ -1,6 +1,6 @@
 # Evidence and falsification notes
 
-**Status:** v0.3.0, external review candidate. This document is the honest
+**Status:** v0.4.0-dev.0, unreleased. This document is the honest
 account of what has and has not been tested, aimed at reviewers whose job
 is to find where MSE breaks — not to promote it.
 
@@ -15,7 +15,8 @@ not change the fundamental posture below: internal consistency is not
 external validation. The later comments did test the distinction between
 independent commit and dependent admission, but the v0.3.0 response shapes
 (`AdmissionRelation`, `UnitLocator`, `AdmissionRefusal`, `CommitResponse`)
-have not themselves been independently reviewed.
+were subsequently reviewed at the behavioral boundary, but the resulting
+v0.4.0-dev.0 message shapes have not themselves been independently reviewed.
 
 The central hypothesis under test, per the source handoff brief:
 
@@ -63,7 +64,10 @@ validation of the resulting v0.3.0 shapes.
    domain knowledge. The v0.3.0 retail binding additionally exercises both
    reported delivery gates, witness completeness and scope, zero-dispatch
    refusals, fresh-state repair, retained quote/snapshot/constraint checks,
-   and post-admission mixed/indeterminate results. 142 tests pass as of
+   and post-admission mixed/indeterminate results. The current development
+   suite additionally covers request/prior/mixed pass satisfaction, prior
+   transition finality, successful-path admission reports, and a retail trace
+   rejection of structurally valid false history. 142 tests passed as of
    v0.3.0. The untouched v0.2.0 baseline actually ran 102 tests; older
    84-test statements were stale documentation, not the observed baseline.
 4. **Two real strict-mode schema bugs were found and fixed** during v0.1.0

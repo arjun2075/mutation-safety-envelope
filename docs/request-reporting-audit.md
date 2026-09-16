@@ -2,7 +2,7 @@
 
 Base `main`: `b39cc8f9cb599f2550dc177a98f9f26eeae1d3b1`.
 Local feature branch: `codex/request-admission-reporting`.
-Audit date: 2026-09-07. These are two self-review passes, not independent
+Audit date: 2026-09-16. These are self-review passes, not independent
 external certification. The reviewed branch may be committed and pushed for
 review; no PR, tags, releases, or external discussion posts were created.
 
@@ -72,12 +72,32 @@ and actual runner counts.
   binding; the single-order retail helper retains its scope checks.
 - Package and root lockfile versions are `0.4.0-dev.0`; the schema ID and
   normative document identify the same unreleased revision. Current README
-  and test documentation report 175, while historical v0.3 documents retain
-  their historical 142 count. Historical compatibility prose now explicitly
+  and test documentation avoid stale totals, while historical v0.3 documents
+  retain their historical 142 count. Historical compatibility prose explicitly
   points to the superseding missing-evaluator behavior.
 - The UCP update is an unsent draft. It distinguishes the supplied observation
   from this repository's proposed shape and does not assert adoption or a
   change to Weston's implementation.
+
+## Pass 3 — wire-visible satisfaction and finality
+
+- Both retail gates declare required pass evidence. Executable cases cover
+  all-current, all-prior-final, and mixed satisfaction, plus current and prior
+  delivery redemption. No fourth coverage status was needed.
+- SUBMITTED, PENDING, and ultimately FAILED delivery-redemption records all
+  refuse. Prior evidence requires a stable transition reference and ISO
+  finalization time.
+- Core rejects wrong scope, current-quote transition mismatch, duplicates,
+  incompatible source fields, and missing/malformed finality fields. A retail
+  trace negative demonstrates that structurally valid wrong-unit and
+  wrong-transition history is rejected only by the binding conformance layer.
+- Every known-quote `COMMIT_RESULT` now carries a required `admissionReport`
+  beside the unchanged `commitResult`. Refusals retain the same shared fields
+  through `AdmissionRefusal`. Admission is not a unit outcome and does not
+  alter reconciliation or downstream effect finality.
+- Monotonic final history narrows the snapshot hazard: stale reads reject,
+  while premature completion reporting remains unsafe. No distributed lock or
+  general check-to-dispatch consistency claim is made.
 
 ## Safety regression evidence
 
@@ -100,7 +120,7 @@ All commands below exited 0 after code/test changes:
 
 | Command | Actual result |
 | --- | --- |
-| `npm test` | **175 passed, 4 files**: core 78, retail admission 24, schema 40, request reporting 33 |
+| `npm test` | **191 passed, 4 files**: core 78, retail admission 35, schema 45, request reporting 33 |
 | `npm run build` | TypeScript compilation passed |
 | `npm run validate-schema` | AJV strict draft-2020-12 compilation passed |
 | `npm run test:baseline` | **2 passed** against recorded v0.3.0 core; 3 cycles/4 quotes reproduced |
@@ -112,9 +132,9 @@ package scripts are identical. A normal supported Node/npm installation can
 run the commands directly. `npm run test:baseline` requires the recorded base
 Git object and installed development dependencies.
 
-The two baseline characterization cases are **not included** in the 175-test
+The two baseline characterization cases are **not included** in the 191-test
 `npm test` result. They run separately because they compile against the
-recorded v0.3.0 core contract. Across the two test invocations, exactly **177
+recorded v0.3.0 core contract. Across the two test invocations, exactly **193
 test cases ran and passed**.
 
 Remaining limitations: provider traces can lie, observational hooks can hide

@@ -15,7 +15,8 @@ and the design rationale behind the schema's shape. Where this document and
 the schema disagree, treat that as a bug report against one of the two, not
 as license to pick whichever is convenient — file an issue.
 
-**v0.4.0-dev.0 adds required admission evaluation coverage**, a breaking
+**v0.4.0-dev.0 adds required admission evaluation coverage and wire-visible
+pass-satisfaction evidence**, a breaking
 pre-1.0 revision of v0.3.0. Independent aggregation was already required by
 §3.2; the new representation distinguishes evaluated results from legitimate
 dependency deferral. See [the executable decision gate](../docs/request-reporting-design.md)
@@ -43,7 +44,7 @@ existing commercial state. It defines:
   confidence (`CommittingUnit`, `Effect`, `Guarantee`);
 - how a quote declares directional cross-unit admission relations and how
   a known pre-dispatch failure reports an honest repair witness
-  (`AdmissionRelation`, `AdmissionRefusal`);
+  (`AdmissionRelation`, `AdmissionReport`, `AdmissionRefusal`);
 - how a caller states the bounds it requires before accepting a mutation
   (`AcceptanceConstraint`);
 - the three legal per-unit outcomes of attempting to commit a mutation,
@@ -319,7 +320,7 @@ against the same acceptanceConstraints carried in the request — a client
 check is not a substitute for provider enforcement, since a caller cannot
 be trusted to have evaluated its own constraints honestly (or at all).
 
-After quote-level safety checks and before dispatching any commercial
+Before returning a correlated commit result and before dispatching any commercial
 mutation, a provider MUST evaluate every independently evaluable applicable
 quote-declared `AdmissionRelation` against the submitted transitions and current
 binding state. It MUST report all failures discovered in that pass together.
@@ -335,20 +336,28 @@ repairing it makes every other relation—or the whole request—admissible.
 
 - `ADMISSION_REFUSED` carries an `AdmissionRefusal` and means this
   submission dispatched **no** commercial mutation;
-- `COMMIT_RESULT` carries the v0.2.0 `CommitResult` with unchanged complete
-  per-unit coverage and determinacy semantics.
+- `COMMIT_RESULT` carries both an `AdmissionReport` and the v0.2.0
+  `CommitResult`. The report concerns admission; the result retains unchanged
+  complete per-unit execution coverage and determinacy semantics.
 
-An `AdmissionRefusal` MUST correlate to the evaluated `quoteId` and the
-originating `proposalId`, carry an ISO 8601 `evaluatedAt`, and contain at
-least one failure. Its optional `stateRef` is opaque evidence of the state
-the binding evaluated; neither it nor `evaluatedAt` is a lock.
+An `AdmissionReport` MUST correlate to the evaluated `quoteId` and the
+originating `proposalId`, carry an ISO 8601 `evaluatedAt`, and carry `failures`
+and `coverage`. Its optional `stateRef` is opaque evidence of evaluated state;
+neither it nor `evaluatedAt` is a lock. `AdmissionRefusal` is the
+failure-bearing specialization and MUST contain at least one failure. A
+`COMMIT_RESULT` report MUST contain no failures. A known quote with no declared
+relations still carries an empty report, so omission cannot hide whether the
+admission boundary ran.
 
-Every `AdmissionRefusal` MUST carry `coverage`, with exactly one
+Every `AdmissionReport` MUST carry `coverage`, with exactly one
 `AdmissionCoverage` entry per quote-declared relation, including relations
 found inapplicable by evaluation. Entries MUST use one of:
 
-- `PASSED`: evaluated at this pass's state and did not fail (including an
-  applicability check that found the relation inapplicable).
+- `PASSED`: evaluated at this pass's state and did not fail. A relation whose
+  quote declaration carries `passEvidence: REQUIRED` MUST also carry a
+  non-empty `satisfactions` list, so its pass cannot be an unexplained absence
+  of failure. Other relation classes MAY define inapplicability as a pass
+  without satisfaction records.
 - `FAILED`: evaluated and failed; exactly one matching `failures` entry MUST
   exist. Every failure MUST have exactly one FAILED coverage entry.
 - `DEFERRED`: applicable, but evaluation requires repair of another relation
@@ -362,6 +371,21 @@ in a reported FAILED relation; cycles, self references, and PASSED dependencies
 are invalid. Dependencies express only the reason for deferral in this pass,
 not a generic execution workflow or an instruction to dispatch repairs.
 
+Each `AdmissionSatisfaction` is one branch of a closed discriminated union:
+
+- `CURRENT_REQUEST` carries the participating quote-local `unitRef` and the
+  opaque transition from that quoted unit. It MUST NOT carry historical
+  finality or correlation fields.
+- `PRIOR_FINAL_TRANSITION` carries the participating binding-scoped
+  `unitLocator`, opaque transition, stable non-empty `transitionRef`, and ISO
+  8601 `finalizedAt`. It MUST NOT carry a quote-local `unitRef`.
+
+Every participant MUST belong to the relation's declared scope. A
+current-request transition MUST match the cited quoted unit. One relation MUST
+NOT repeat satisfaction for the same binding-scoped unit, including once from
+each source. This supports all-current, all-prior, and mixed satisfaction
+without assigning domain meaning to an operation or state.
+
 A missing coverage entry, an unknown relation, a duplicate reference, or a
 coverage/failure contradiction is invalid. Early stopping MUST NOT masquerade
 as PASSED or DEFERRED. If evaluation cannot be completed or justified by these
@@ -369,8 +393,9 @@ dependency rules, a provider MUST stop before dispatch and use its binding's
 error mechanism; it MUST NOT invent a known admission failure. In particular,
 absence of an evaluator is not an UNAVAILABLE repair witness.
 
-`coverage`, `failures`, and `dependsOn` are correlated as sets by relation
-identity. Their array order carries no semantic meaning. Providers SHOULD use
+`coverage` and `failures` are correlated by relation identity; `dependsOn`
+is a set of relation identities and `satisfactions` a set of participants.
+Their array order carries no semantic meaning. Providers SHOULD use
 stable ordering for reproducible diagnostics, while callers and validators
 MUST NOT infer evaluation order, dependency priority, or result meaning from
 array position.
@@ -385,9 +410,21 @@ relation IDs against a quote or correlate the two arrays; runtime validation
 and provider-side trace conformance are also required.
 
 Before dispatch, the reference provider requires hook coverage even if no
-failures were returned; all entries must then be PASSED. `COMMIT_RESULT` does
-not gain coverage: quote-level safety checks can reject before admission, so
-that branch by itself does not establish an admission pass.
+failures were returned; all entries must then be PASSED. It preserves the
+validated report and attaches it beside, never inside, `CommitResult` on the
+successful path. An unknown quote cannot provide quote/proposal correlation
+and therefore fails rather than fabricating a report.
+
+Only a transition known final may support `PRIOR_FINAL_TRANSITION` evidence.
+Submitted, pending, provisional, and failed transitions MUST NOT qualify. If a
+terminal transition becomes visible only after finalization, a stale read can
+show older state and cause rejection, which fails closed. A state source that
+reports completion before finality can instead produce an unsafe pass. This
+evidence narrows the snapshot problem for monotonic terminal transitions; it
+does not solve general distributed-state or check-to-dispatch consistency.
+Each binding MUST document its read consistency and finality rules.
+Provider/binding trace conformance, not the domain-blind core, MUST substantiate
+that opaque history is truthful and semantically sufficient.
 
 An aggregate set of COMPLETE witnesses permits a union amendment only if the
 binding can reconcile and authorize those transitions. It does not promise
@@ -975,15 +1012,19 @@ unresolved.
 
 ## 9a. v0.3.0 → v0.4.0-dev.0 compatibility
 
-Required `AdmissionRefusal.coverage` and the public `AdmissionCoverage` union
-change the closed schema and TypeScript API. `AdmissionEvaluation` hooks must
-return coverage on both failed and successful evaluations. Missing hooks now
+Required report coverage, `AdmissionSatisfaction`, `AdmissionRelation.passEvidence`,
+and the public `AdmissionCoverage` union change the closed schema and TypeScript
+API. `COMMIT_RESULT` now requires a sibling `admissionReport`; admission data is
+not merged into `CommitResult`. `AdmissionEvaluation` hooks must return coverage
+on both failed and successful evaluations. Missing hooks now
 raise a pre-dispatch error instead of fabricating UNAVAILABLE failure witnesses.
 These breaks warrant a new minor revision under this pre-1.0 project's convention.
 
 Migrate evaluators to record actual evaluation results for every declaration,
 report all independently evaluable failures, and identify genuine repair
 dependencies. Do not populate PASSED solely because a relation is absent from
-an untrusted/incomplete failure list. Existing witnesses, quote fields,
+an untrusted/incomplete failure list. When a binding declares pass evidence
+required, report current-request or cited prior-final satisfaction and enforce
+its truth through binding trace conformance. Existing witnesses, quote fields,
 per-unit outcomes, reconciliation, and receipts retain their meanings.
 This is unreleased development work; published v0.3.0 artifacts are unchanged.

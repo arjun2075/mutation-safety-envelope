@@ -29,7 +29,8 @@
         "relationId": "retail:delivery_cancel_requires_goods_cancel",
         "type": "REQUIRES_COINCLUSION",
         "triggerUnitRefs": ["proposal_cancel_delivery_2:unit:1"],
-        "scopeRef": "retail:order_799"
+        "scopeRef": "retail:order_799",
+        "passEvidence": "REQUIRED"
       }
     ]
   },
@@ -39,6 +40,31 @@
   },
   "commitResponse": {
     "kind": "COMMIT_RESULT",
+    "admissionReport": {
+      "quoteId": "quote_cancel_delivery_2",
+      "proposalId": "proposal_cancel_delivery_2",
+      "evaluatedAt": "2026-09-05T16:05:00Z",
+      "stateRef": { "orderVersion": 41 },
+      "failures": [],
+      "coverage": [
+        {
+          "relationId": "retail:delivery_cancel_requires_goods_cancel",
+          "status": "PASSED",
+          "satisfactions": [
+            {
+              "source": "CURRENT_REQUEST",
+              "unitRef": "proposal_cancel_delivery_2:unit:2",
+              "transition": { "unitKey": "goods_1", "operation": "CANCEL" }
+            },
+            {
+              "source": "CURRENT_REQUEST",
+              "unitRef": "proposal_cancel_delivery_2:unit:3",
+              "transition": { "unitKey": "goods_2", "operation": "CANCEL" }
+            }
+          ]
+        }
+      ]
+    },
     "commitResult": {
       "quoteId": "quote_cancel_delivery_2",
       "unitResults": [

@@ -14,7 +14,7 @@
     "test:baseline": "node scripts/reproduce-v0.3.mjs",
     "test:watch": "vitest",
     "validate-schema": "node scripts/validate-schema.mjs",
-    "lint:examples": "node --experimental-vm-modules ./node_modules/.bin/tsx test/schema-conformance.test.ts",
+    "lint:examples": "vitest run test/schema-conformance.test.ts",
     "ci": "npm test && npm run build && npm run validate-schema"
   },
   "devDependencies": {

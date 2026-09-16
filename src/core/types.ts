@@ -95,6 +95,12 @@ export interface AdmissionRelation {
   triggerUnitRefs: string[];
   /** Binding-defined scope in which any required UnitLocator is resolved. */
   scopeRef: string;
+  /**
+   * Declares that a PASSED result for this relation must identify the
+   * participating transitions that satisfied it. The core validates shape
+   * and correlation only; the binding owns their meaning and truth.
+   */
+  passEvidence?: "REQUIRED";
 }
 
 /** A non-mutating representation of the predicted consequences of a proposal. */
@@ -186,23 +192,70 @@ export interface AdmissionFailure {
   witness: AdmissionWitness;
 }
 
+/** One transition that the binding says satisfied a relation in this pass. */
+export type AdmissionSatisfaction =
+  | {
+      source: "CURRENT_REQUEST";
+      /** Quote-local reference to the participating unit. */
+      unitRef: string;
+      /** Opaque transition, repeated so the evidence is reader-facing. */
+      transition: unknown;
+      unitLocator?: never;
+      transitionRef?: never;
+      finalizedAt?: never;
+    }
+  | {
+      source: "PRIOR_FINAL_TRANSITION";
+      /** Stable binding-scoped identity for a unit outside this quote. */
+      unitLocator: UnitLocator;
+      /** Opaque binding-defined transition proven final by the binding. */
+      transition: unknown;
+      /** Stable correlation for the prior transition. */
+      transitionRef: string;
+      /** ISO 8601 time at which the prior transition became final. */
+      finalizedAt: string;
+      unitRef?: never;
+    };
+
 /** Evaluation coverage is separate from the repair disposition of a failure. */
 export type AdmissionCoverage =
-  | { relationId: string; status: "PASSED" | "FAILED"; dependsOn?: never }
+  | {
+      relationId: string;
+      status: "PASSED";
+      satisfactions?: AdmissionSatisfaction[];
+      dependsOn?: never;
+    }
+  | {
+      relationId: string;
+      status: "FAILED";
+      satisfactions?: never;
+      dependsOn?: never;
+    }
   | { relationId: string; status: "DEFERRED"; dependsOn: string[] };
 
-/** A known pre-dispatch refusal. No commercial mutation was dispatched. */
-export interface AdmissionRefusal {
+/** Reader-facing result of one admission evaluation pass. */
+export interface AdmissionReport {
   quoteId: string;
   proposalId: string;
   /** ISO 8601 time at which the binding evaluated current dependency state. */
   evaluatedAt: string;
   /** Optional opaque binding state/version evidence. This is not a lock. */
   stateRef?: unknown;
-  /** One or more failed relations. A witness applies only to its own relation. */
+  /** Failed relations. A witness applies only to its own relation. */
   failures: AdmissionFailure[];
   /** Exactly one entry per quote-declared relation for this evaluation pass. */
   coverage: AdmissionCoverage[];
+}
+
+/** A known pre-dispatch refusal. No commercial mutation was dispatched. */
+export interface AdmissionRefusal extends AdmissionReport {
+  /** A refusal necessarily reports at least one failed relation. */
+  failures: [AdmissionFailure, ...AdmissionFailure[]];
+}
+
+/** Admission report carried beside a CommitResult after admission passed. */
+export interface SuccessfulAdmissionReport extends AdmissionReport {
+  failures: [];
 }
 
 /**
@@ -304,12 +357,18 @@ export interface CommitResult {
 }
 
 /**
- * v0.3.0 commit response. Admission refusal remains distinct from per-unit
- * commit outcomes because a known refusal dispatches no commercial mutation.
+ * Admission refusal remains distinct from per-unit commit outcomes because a
+ * known refusal dispatches no commercial mutation. Successful/commit-result
+ * responses carry their admission report beside, never inside, CommitResult.
  */
 export type CommitResponse =
   | { kind: "ADMISSION_REFUSED"; admissionRefusal: AdmissionRefusal }
-  | { kind: "COMMIT_RESULT"; commitResult: CommitResult };
+  | {
+      kind: "COMMIT_RESULT";
+      /** Admission remains distinct from the execution result. */
+      admissionReport: SuccessfulAdmissionReport;
+      commitResult: CommitResult;
+    };
 
 export type EffectFinalityState = "FINAL" | "PENDING" | "FAILED" | "UNKNOWN";
 

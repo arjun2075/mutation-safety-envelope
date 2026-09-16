@@ -11,15 +11,17 @@
  *
  * This is reference behavior, not the only legal implementation.
  *
- * v0.3.0 change: commit() now returns a discriminated CommitResponse so a
- * known pre-dispatch admission refusal remains separate from the existing
- * per-unit CommitResult. See /docs/v0.3-design-decision.md.
+ * commit() returns a discriminated CommitResponse so a known pre-dispatch
+ * admission refusal remains separate from the existing per-unit CommitResult.
+ * Passing coverage remains reader-visible as a sibling AdmissionReport.
  */
 
 import type {
   AdmissionFailure,
   AdmissionCoverage,
+  AdmissionReport,
   AdmissionRefusal,
+  SuccessfulAdmissionReport,
   CommitRequest,
   CommitResponse,
   CommitResult,
@@ -37,7 +39,7 @@ import {
   isQuoteExpired,
   assertQuoteUnitsWellFormed,
   assertAdmissionRefusalWellFormed,
-  assertAdmissionCoverageWellFormed,
+  assertAdmissionReportWellFormed,
   computeAggregateHint,
   MseViolation,
 } from "./validate";
@@ -173,22 +175,49 @@ export class ReferenceProvider {
     const quote = this.quotesById.get(request.quoteId);
 
     if (!quote) {
-      // No quote to enumerate units from; nothing to report per-unit.
-      // A provider cannot invent units it never quoted, so this remains a
-      // single synthetic UnitResult keyed by a placeholder — see
-      // /spec/normative-spec.md §1b note on unknown-quote handling.
-      const unitResults: UnitResult[] = [
-        { unitRef: "unknown", outcome: "REFUSED", refusalReason: "PROVIDER_REJECTED" },
-      ];
-      return {
-        kind: "COMMIT_RESULT",
-        commitResult: {
-          quoteId: request.quoteId,
-          unitResults,
-          aggregateHint: computeAggregateHint(unitResults),
-        },
-      };
+      throw new MseViolation(
+        `Unknown quote "${request.quoteId}" cannot produce a correlated admission report.`
+      );
     }
+
+    const proposal = this.proposalsByQuoteId.get(quote.quoteId);
+    if (!proposal) {
+      throw new MseViolation(`ReferenceProvider lost proposal context for quote "${quote.quoteId}".`);
+    }
+
+    let evaluation: AdmissionEvaluation = { failures: [], coverage: [] };
+    if (quote.admissionRelations.length > 0) {
+      if (!this.admission) {
+        throw new MseViolation("Declared admission relations require an evaluator; no result is known.");
+      }
+      evaluation = this.admission(proposal, quote, now);
+      if (!evaluation || !Array.isArray(evaluation.failures)) {
+        throw new MseViolation(`Admission evaluator returned a malformed evaluation.`);
+      }
+    }
+
+    const admissionReport: AdmissionReport = {
+      quoteId: quote.quoteId,
+      proposalId: proposal.proposalId,
+      evaluatedAt: now.toISOString(),
+      ...(evaluation.stateRef === undefined ? {} : { stateRef: evaluation.stateRef }),
+      failures: evaluation.failures,
+      coverage: evaluation.coverage,
+    };
+    assertAdmissionReportWellFormed(quote, proposal, admissionReport);
+
+    if (evaluation.failures.length > 0) {
+      const admissionRefusal: AdmissionRefusal = {
+        ...admissionReport,
+        failures: evaluation.failures as [AdmissionFailure, ...AdmissionFailure[]],
+      };
+      assertAdmissionRefusalWellFormed(quote, proposal, admissionRefusal);
+      return { kind: "ADMISSION_REFUSED", admissionRefusal };
+    }
+    const successfulAdmissionReport: SuccessfulAdmissionReport = {
+      ...admissionReport,
+      failures: [],
+    };
 
     if (isQuoteExpired(quote, now)) {
       const unitResults: UnitResult[] = quote.units.map((u) => ({
@@ -198,6 +227,7 @@ export class ReferenceProvider {
       }));
       return {
         kind: "COMMIT_RESULT",
+        admissionReport: successfulAdmissionReport,
         commitResult: {
           quoteId: quote.quoteId,
           unitResults,
@@ -217,6 +247,7 @@ export class ReferenceProvider {
         this.unitResultsByQuoteId.set(quote.quoteId, unitResults);
         return {
           kind: "COMMIT_RESULT",
+          admissionReport: successfulAdmissionReport,
           commitResult: {
             quoteId: quote.quoteId,
             unitResults,
@@ -230,37 +261,6 @@ export class ReferenceProvider {
     const violatedEffectIds = new Set<string>();
     if (violated.length > 0) {
       for (const c of violated) violatedEffectIds.add(c.effectId);
-    }
-
-    const proposal = this.proposalsByQuoteId.get(quote.quoteId);
-    if (!proposal) {
-      throw new MseViolation(`ReferenceProvider lost proposal context for quote "${quote.quoteId}".`);
-    }
-
-    if (quote.admissionRelations.length > 0) {
-      if (!this.admission) {
-        throw new MseViolation("Declared admission relations require an evaluator; no result is known.");
-      }
-      const evaluation = this.admission(proposal, quote, now);
-
-      if (!evaluation || !Array.isArray(evaluation.failures)) {
-        throw new MseViolation(`Admission evaluator returned a malformed evaluation.`);
-      }
-
-      assertAdmissionCoverageWellFormed(quote, evaluation.failures, evaluation.coverage);
-
-      if (evaluation.failures.length > 0) {
-        const admissionRefusal: AdmissionRefusal = {
-          quoteId: quote.quoteId,
-          proposalId: proposal.proposalId,
-          evaluatedAt: now.toISOString(),
-          ...(evaluation.stateRef === undefined ? {} : { stateRef: evaluation.stateRef }),
-          failures: evaluation.failures,
-          coverage: evaluation.coverage,
-        };
-        assertAdmissionRefusalWellFormed(quote, proposal, admissionRefusal);
-        return { kind: "ADMISSION_REFUSED", admissionRefusal };
-      }
     }
 
     const unitResults: UnitResult[] = quote.units.map((unit) => {
@@ -298,6 +298,7 @@ export class ReferenceProvider {
 
     return {
       kind: "COMMIT_RESULT",
+      admissionReport: successfulAdmissionReport,
       commitResult: {
         quoteId: quote.quoteId,
         unitResults,

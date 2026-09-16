@@ -10,18 +10,19 @@
   commit attempts (`APPLIED`+`REFUSED`, `APPLIED`+`INDETERMINATE` in the
   same `CommitResult`) and reconciliation resolving to `APPLIED`, to
   `REFUSED`, and remaining unresolved.
-- `admission.test.ts` — v0.3.0 cross-unit admission behavior using the
+- `admission.test.ts` — cross-unit admission behavior using the
   executable retail binding: both delivery gates, live complete witnesses,
   exclusion of already-satisfied requirements, zero-dispatch refusals,
   partial/unavailable/malformed evidence, duplicate/wrong-scope/unresolvable
   references, binding-owned authorization, fresh re-quote/revalidation,
-  preserved expiry/snapshot/acceptance constraints, and later mixed or
-  `INDETERMINATE` per-unit results.
+  preserved expiry/snapshot/acceptance constraints, current/prior/mixed pass
+  satisfaction, finality negatives, successful-path reports, binding trace
+  lies, and later mixed or `INDETERMINATE` per-unit results.
 - `schema-conformance.test.ts` — validates every `*.fixture.json` file
   under `/examples` against `/schema/mse-core.schema.json` using ajv in
   strict mode, plus a set of negative cases asserting the schema *rejects*
   v0.1.0 shapes, malformed v0.2.0 reconciliation contracts, and malformed
-  v0.3.0 admission messages.
+  admission messages, successful admission reports, and satisfaction records.
 
 ## Admission behavior is tested before dispatch
 
@@ -83,10 +84,10 @@ npm install
 npm test
 ```
 
-`npm test` runs 175 current-contract tests. The separate
+`npm test` runs 191 current-contract tests. The separate
 `npm run test:baseline` command runs 2 characterization cases against the
-recorded v0.3.0 core; those 2 are not included in the 175. A full verification
-therefore runs and passes 177 test cases across two invocations. Before this
+recorded v0.3.0 core; those 2 are not included in the 191. A full verification
+therefore runs and passes 193 test cases across two invocations. Before this
 branch, the recorded v0.3.0 baseline suite ran 142 tests. The untouched v0.2.0
 base ran 102; the older 84-test count in historical documentation was stale.
 

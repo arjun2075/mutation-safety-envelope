@@ -5,7 +5,8 @@
 
 > **v0.4.0-dev.0 is a breaking development revision of v0.3.0.** Required
 > admission coverage distinguishes passed/failed relations from repair-dependent
-> deferral. The recorded v0.3.0 reproduction needs three refusal/repair cycles;
+> deferral, and participating-unit passes can expose current-request or
+> prior-final satisfaction on both response paths. The recorded v0.3.0 reproduction needs three refusal/repair cycles;
 > independent aggregation reports all three failures together. See the
 > [decision](docs/request-reporting-design.md) and [audit](docs/request-reporting-audit.md).
 > This is proposed MSE design work, not UCP adoption or endorsement.
@@ -44,9 +45,9 @@ Quote (one or more independently committing units)
    └── stable directional admission relations (no frozen witness)
    ↓
 Admission against live state
-   ├── refused before dispatch → per-relation coverage + failure witnesses
+   ├── refused before dispatch → admission report + failure witnesses
    │                              → amended proposal → new quote
-   └── passed (every declared relation evaluated PASSED)
+   └── passed → wire-visible admission report + satisfaction evidence
          ↓
 Commit  →  one result PER UNIT, not one for the whole mutation:
    ├── unit A: APPLIED
@@ -120,7 +121,7 @@ different domains instantiate the same core without adding to it.
 
 ```bash
 npm install
-npm test                # 175 current-contract tests
+npm test                # current-contract tests
 npm run test:baseline   # 2 separate cases against recorded v0.3.0 core
 npm run build            # tsc typecheck/build
 npm run validate-schema  # compiles the JSON Schema standalone under ajv strict mode

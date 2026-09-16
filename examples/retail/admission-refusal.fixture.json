@@ -26,7 +26,8 @@
         "relationId": "retail:delivery_cancel_requires_goods_cancel",
         "type": "REQUIRES_COINCLUSION",
         "triggerUnitRefs": ["proposal_cancel_delivery_1:unit:1"],
-        "scopeRef": "retail:order_799"
+        "scopeRef": "retail:order_799",
+        "passEvidence": "REQUIRED"
       }
     ]
   },
