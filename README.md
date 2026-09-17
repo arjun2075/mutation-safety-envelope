@@ -6,7 +6,10 @@
 > **v0.4.0-dev.0 is a breaking development revision of v0.3.0.** Required
 > admission coverage distinguishes passed/failed relations from repair-dependent
 > deferral, and participating-unit passes can expose current-request or
-> prior-final satisfaction on both response paths. The recorded v0.3.0 reproduction needs three refusal/repair cycles;
+> prior-final satisfaction on both response paths. A pass states the complete
+> participant set its evidence must cover, and current-request evidence is
+> correlated with per-unit execution outcomes so an admitted pass is never read
+> as proof the satisfaction took effect. The recorded v0.3.0 reproduction needs three refusal/repair cycles;
 > independent aggregation reports all three failures together. See the
 > [decision](docs/request-reporting-design.md) and [audit](docs/request-reporting-audit.md).
 > This is proposed MSE design work, not UCP adoption or endorsement.
@@ -48,6 +51,7 @@ Admission against live state
    ├── refused before dispatch → admission report + failure witnesses
    │                              → amended proposal → new quote
    └── passed → wire-visible admission report + satisfaction evidence
+         │            (admission-time truth; realization derived at execution)
          ↓
 Commit  →  one result PER UNIT, not one for the whole mutation:
    ├── unit A: APPLIED

@@ -65,6 +65,25 @@ the complete per-unit result and reconciliation rules remain authoritative.
 Preventing that economic outcome would require a stronger binding-level
 transaction guarantee that this example does not claim.
 
+A satisfied gate is therefore not a claim that the satisfaction took effect.
+When the request itself supplies the satisfier, a caller acceptance constraint
+can refuse exactly that unit, leaving a truthful `PASSED` entry whose cited
+transition the same response reports `REFUSED`. Admission-time coverage is not
+rewritten; the execution-time reading is derived by correlating each
+`CURRENT_REQUEST` record with its `unitResult` (`APPLIED` realized, `REFUSED`
+not realized, `INDETERMINATE` indeterminate). See
+[`/spec/normative-spec.md` §3.2a](../../spec/normative-spec.md). The dependent
+unit is still not required to wait for its satisfier to be applied.
+
+Each `PASSED` entry for these gates also states the complete participant set
+the evaluation required, so evidence citing only one of two required goods
+cancellations is rejected rather than silently accepted. Core independently
+requires every co-included quoted unit to appear in that set, so a producer
+cannot hide an omission by shrinking both the evidence and the stated set.
+Participants satisfied by prior history are not quoted units, so this binding's
+trace conformance re-derives the required set from real state and rejects a
+forged one.
+
 ## Files
 
 - [`quote.fixture.json`](./quote.fixture.json) — a `MutationQuote` for this scenario, validated in CI against `/schema/mse-core.schema.json`.
@@ -79,3 +98,10 @@ transaction guarantee that this example does not claim.
   the same units.
 - [`multi-unit-commit-response.fixture.json`](./multi-unit-commit-response.fixture.json)
   — the `COMMIT_RESULT` branch with preserved mixed per-unit outcomes.
+- [`unrealized-satisfaction.fixture.json`](./unrealized-satisfaction.fixture.json)
+  — the UCP #799 counterexample: admission passes on a delivery redeem present
+  in the request, a caller constraint refuses that delivery unit, and `goods_1`
+  is `APPLIED`. The entry stays `PASSED` because it is true about admission;
+  correlating the record with `unitResults` yields `NOT_REALIZED`. The derived
+  verdict is deliberately absent from the fixture because it is not admission
+  wire data.

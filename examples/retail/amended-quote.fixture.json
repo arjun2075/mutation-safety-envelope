@@ -61,6 +61,16 @@
               "unitRef": "proposal_cancel_delivery_2:unit:3",
               "transition": { "unitKey": "goods_2", "operation": "CANCEL" }
             }
+          ],
+          "requiredParticipants": [
+            {
+              "unitLocator": { "scopeRef": "retail:order_799", "unitKey": "goods_1" },
+              "transition": { "unitKey": "goods_1", "operation": "CANCEL" }
+            },
+            {
+              "unitLocator": { "scopeRef": "retail:order_799", "unitKey": "goods_2" },
+              "transition": { "unitKey": "goods_2", "operation": "CANCEL" }
+            }
           ]
         }
       ]

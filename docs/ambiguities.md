@@ -246,3 +246,46 @@ This does not prove opaque history truthful, define domain transition states,
 or close the general distributed check-to-dispatch gap. Those remain binding
 trace and consistency obligations. `NOT_APPLICABLE` was not added for prior
 completed transitions because those transitions satisfy these gates.
+
+---
+
+## 11. Current-request satisfaction asserted more than admission knew — **RESOLVED narrowly in v0.4.0-dev.0**
+
+**Ambiguity/falsification:** a `CURRENT_REQUEST` record was treated as
+satisfaction outright, but at admission that transition has only been
+requested, which is the same not-yet-final condition the prior-final branch
+excludes. A caller acceptance constraint could then refuse the satisfying unit
+while the dependent one applied, producing a response whose `PASSED` evidence
+the same response contradicted. Two smaller gaps travelled with it: a PASSED
+could cite a subset of the required participants without the report ever
+stating what was required, and `finalizedAt` was format-checked but never
+compared with the `evaluatedAt` beside it.
+
+**Resolution:** admission-time `PASSED` keeps its meaning and is not
+rewritten. When a `COMMIT_RESULT` is available, validation correlates every
+`CURRENT_REQUEST` record with its `unitResult` and derives realization
+(`APPLIED` realized, `REFUSED` not realized, `INDETERMINATE` indeterminate;
+prior-final evidence is not applicable). PASSED entries for evidence-required
+relations now state the complete `requiredParticipants` set, which evidence
+must cover exactly, and prior-final evidence must satisfy
+`finalizedAt <= evaluatedAt`. See spec §3.2a.
+
+Because the hole was that a *reader* could infer realization from `PASSED`,
+the obligation is stated normatively against consumers, not only validators:
+once a `COMMIT_RESULT` exists, a consumer MUST correlate `CURRENT_REQUEST`
+evidence with `unitResults` before treating it as realized, and MUST NOT
+assume the favorable reading when it cannot correlate.
+
+Comparing evidence against a producer-supplied participant set would be
+tautological on its own, since a producer could omit a participant from both
+arrays. Core therefore derives a lower bound independently — every
+co-included non-trigger quoted unit in the relation's scope must appear in the
+stated set — and binding trace conformance validates the remainder, including
+participants satisfied by prior history that core cannot enumerate.
+
+The realization verdict is derived, not carried as admission wire data, so it
+cannot drift from the `unitResults` it comes from. `REQUIRES_COINCLUSION`
+stays non-atomic: no dependent unit waits for its satisfier to become
+`APPLIED`, and a refused satisfier does not refuse the dependent unit. What
+remains open is whether a reader that cannot run the correlation itself needs
+the verdict on the wire (spec §8, item 7).

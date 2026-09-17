@@ -397,6 +397,18 @@
       ]
     },
 
+    "AdmissionRequiredParticipant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unitLocator", "transition"],
+      "description": "One participant whose transition a relation required at this evaluation pass. Carried on the coverage entry, not the quote declaration, because the satisfying set is live state resolved at admission. Naming the complete set is what lets validation reject a PASSED that cites only a subset.",
+      "properties": {
+        "unitLocator": { "$ref": "#/$defs/UnitLocator" },
+        "transition": {
+          "description": "Opaque binding-defined transition this participant had to contribute."
+        }
+      }
+    },
     "AdmissionCoverage": {
       "description": "Coverage of one quote-declared relation in this evaluation pass; distinct from repair completeness.",
       "oneOf": [
@@ -417,6 +429,13 @@
               "type": "array",
               "minItems": 1,
               "items": { "$ref": "#/$defs/AdmissionSatisfaction" }
+            },
+            "requiredParticipants": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/AdmissionRequiredParticipant" },
+              "description": "The complete participant set this evaluation required. When present, satisfactions MUST cover it exactly: no omitted participant and none outside it. Required alongside evidence when the relation declares passEvidence REQUIRED. Exact correspondence needs the quote and both arrays together, so runtime validation enforces it; JSON Schema alone cannot."
             }
           }
         },

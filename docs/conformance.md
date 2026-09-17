@@ -45,11 +45,31 @@ A provider claiming MSE v0.4.0-dev.0 conformance MUST:
    and deferral; schema validity alone does not prove exhaustive reporting.
    Early stop and missing evaluators MUST fail before dispatch, without
    inventing a failure witness. A relation declaring `passEvidence: REQUIRED`
-   MUST have non-empty PASSED satisfaction records. Current-request records
-   must correlate to quoted units; prior records must cite a stable transition
-   reference and ISO finalization time. Only binding-confirmed final history
+   MUST have non-empty PASSED satisfaction records and MUST state the complete
+   `requiredParticipants` set that evidence covers; evidence MUST cover that
+   set exactly, so a PASSED citing only a subset is non-conformant. The stated
+   set MUST contain every participant core can derive independently — for
+   `REQUIRES_COINCLUSION`, every co-included non-trigger quoted unit in the
+   relation's scope — so the check cannot be satisfied by omitting a
+   participant from both arrays. Binding trace conformance MUST validate the
+   remainder core cannot derive, including participants satisfied by prior
+   history.
+   Current-request records must correlate to quoted units; prior records must
+   cite a stable transition reference and an ISO finalization time satisfying
+   `finalizedAt <= evaluatedAt`. Only binding-confirmed final history
    qualifies. Binding trace conformance must catch well-shaped false history
    that domain-blind core validation cannot prove false.
+   Treat a `CURRENT_REQUEST` record as admission-time truth only: it
+   establishes that the required transition was present when admission ran,
+   never that the satisfaction took effect. When a `COMMIT_RESULT` is
+   available, every such record MUST be correlatable with its unit's
+   `unitResult`, and a reader MUST NOT treat the pass as execution-time
+   realized satisfaction when that unit is `REFUSED` or `INDETERMINATE`
+   (spec §3.2a). That is a reporting obligation: it neither requires ordered
+   dispatch nor refuses the dependent unit. Consumers carry the matching
+   normative duty: once a `COMMIT_RESULT` exists, a consumer MUST NOT read
+   `CURRENT_REQUEST` evidence as realized satisfaction without performing that
+   correlation, and MUST NOT assume the favorable reading when it cannot.
 6. Produce a `CommitResult.unitResults` entry for **every** unit in the
    quote — no silent omission, no duplicates, no unknown `unitRef` (spec
    §1b) — each giving exactly one of `APPLIED` / `REFUSED` /

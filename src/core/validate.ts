@@ -28,6 +28,9 @@ import type {
   MutationQuote,
   Reconciliation,
   MutationProposal,
+  SatisfactionRealization,
+  SatisfactionRealizationEntry,
+  SatisfactionRealizationReport,
   UnitLocator,
   UnitResult,
 } from "./types";
@@ -386,7 +389,15 @@ function isIsoDateTime(value: unknown): value is string {
 export function assertAdmissionCoverageWellFormed(
   quote: MutationQuote,
   failures: AdmissionFailure[],
-  coverage: AdmissionCoverage[]
+  coverage: AdmissionCoverage[],
+  /**
+   * The evaluation instant of the report this coverage belongs to. When
+   * supplied, every PRIOR_FINAL_TRANSITION record is additionally required to
+   * satisfy `finalizedAt <= evaluatedAt`: evidence cannot have become final
+   * after the pass that cited it. Optional so a caller validating bare
+   * coverage without a report keeps the existing behavior.
+   */
+  evaluatedAt?: string
 ): void {
   if (!Array.isArray(coverage)) throw new MseViolation("Admission coverage is required.");
   if (!Array.isArray(failures)) throw new MseViolation("Admission failures must be an array.");
@@ -412,7 +423,7 @@ export function assertAdmissionCoverageWellFormed(
     const keys = entry.status === "DEFERRED"
       ? ["relationId", "status", "dependsOn"]
       : entry.status === "PASSED"
-        ? ["relationId", "status", "satisfactions"]
+        ? ["relationId", "status", "satisfactions", "requiredParticipants"]
         : ["relationId", "status"];
     if (Object.keys(entry).some(key => !keys.includes(key))) throw new MseViolation("Field in wrong coverage branch.");
     if ((entry.status === "FAILED") !== failed.has(entry.relationId)) {
@@ -433,11 +444,91 @@ export function assertAdmissionCoverageWellFormed(
           `PASSED coverage for relation "${entry.relationId}" requires satisfaction evidence.`
         );
       }
+      // The complete participant set this evaluation required. Carrying it
+      // lets a reader see an omission that satisfaction evidence alone hides
+      // (UCP #799): a PASSED citing one of two required participants is
+      // otherwise indistinguishable from a complete pass.
+      const requiredParticipantKeys = new Set<string>();
+      if (entry.requiredParticipants !== undefined) {
+        if (!Array.isArray(entry.requiredParticipants) || entry.requiredParticipants.length === 0) {
+          throw new MseViolation(
+            `PASSED coverage for relation "${entry.relationId}" carries an empty required ` +
+              `participant set; omit the field instead of asserting no participants.`
+          );
+        }
+        for (const participant of entry.requiredParticipants) {
+          if (!participant || typeof participant !== "object" ||
+              Object.keys(participant).some(key => !["unitLocator", "transition"].includes(key)) ||
+              !Object.prototype.hasOwnProperty.call(participant, "transition")) {
+            throw new MseViolation(
+              `Malformed required participant on relation "${entry.relationId}".`
+            );
+          }
+          assertUnitLocatorWellFormed(
+            participant.unitLocator,
+            `Required participant for relation "${entry.relationId}"`
+          );
+          if (participant.unitLocator.scopeRef !== relation.scopeRef) {
+            throw new MseViolation(
+              `Required participant for relation "${entry.relationId}" is outside declared scope ` +
+                `"${relation.scopeRef}".`
+            );
+          }
+          const participantKey = unitLocatorKey(participant.unitLocator);
+          if (requiredParticipantKeys.has(participantKey)) {
+            throw new MseViolation(
+              `Relation "${entry.relationId}" repeats required participant ` +
+                `${JSON.stringify(participant.unitLocator)}.`
+            );
+          }
+          requiredParticipantKeys.add(participantKey);
+        }
+      } else if (relation.passEvidence === "REQUIRED") {
+        throw new MseViolation(
+          `PASSED coverage for relation "${entry.relationId}" declares pass evidence required ` +
+            `but does not state the participant set that evidence must cover.`
+        );
+      }
+
+      // Independent grounding of the stated set.
+      //
+      // Checking `satisfactions` against a producer-supplied
+      // `requiredParticipants` is tautological on its own: a producer that
+      // omits a participant from BOTH arrays still validates. Core therefore
+      // independently derives what it can and treats it as a LOWER BOUND.
+      //
+      // For REQUIRES_COINCLUSION, every quoted unit inside the relation's
+      // declared scope that is not itself a trigger is a participant core can
+      // see without any domain knowledge: the relation says those transitions
+      // are admissible only together. Such a unit MUST appear in the stated
+      // required set.
+      //
+      // This is deliberately a lower bound, not equality. The true required
+      // set may also contain units absent from the quote — satisfied by prior
+      // final history — which core cannot enumerate, because only the binding
+      // knows which scoped units exist and which already reached the state
+      // the gate wants. Binding trace conformance owns that remainder; see
+      // /spec/normative-spec.md §3.2.
+      if (requiredParticipantKeys.size > 0) {
+        const triggers = new Set(relation.triggerUnitRefs);
+        for (const unit of quote.units) {
+          if (unit.unitLocator.scopeRef !== relation.scopeRef) continue;
+          if (triggers.has(unit.unitRef)) continue;
+          if (!requiredParticipantKeys.has(unitLocatorKey(unit.unitLocator))) {
+            throw new MseViolation(
+              `PASSED coverage for relation "${entry.relationId}" omits quoted unit ` +
+                `${JSON.stringify(unit.unitLocator)} from its required participant set, ` +
+                `although that unit is co-included in the relation's declared scope; ` +
+                `the stated set MUST contain every core-visible required participant.`
+            );
+          }
+        }
+      }
+      const seenSatisfactionUnits = new Set<string>();
       if (entry.satisfactions !== undefined) {
         if (!Array.isArray(entry.satisfactions) || entry.satisfactions.length === 0) {
           throw new MseViolation("Satisfaction evidence, when present, must be non-empty.");
         }
-        const seenSatisfactionUnits = new Set<string>();
         for (const satisfaction of entry.satisfactions) {
           if (!satisfaction || typeof satisfaction !== "object" ||
               !Object.prototype.hasOwnProperty.call(satisfaction, "transition")) {
@@ -479,6 +570,18 @@ export function assertAdmissionCoverageWellFormed(
             if (!isIsoDateTime(satisfaction.finalizedAt)) {
               throw new MseViolation("Prior-final satisfaction finalizedAt MUST be an ISO 8601 timestamp.");
             }
+            // Temporal consistency: prior evidence cannot become final after
+            // the pass that cited it as already-final history. Equality is
+            // permitted; the instants are only compared, never ordered
+            // beyond this bound. Both timestamps are already on the wire.
+            if (evaluatedAt !== undefined &&
+                Date.parse(satisfaction.finalizedAt) > Date.parse(evaluatedAt)) {
+              throw new MseViolation(
+                `Prior-final satisfaction for relation "${entry.relationId}" claims finalization ` +
+                  `at ${satisfaction.finalizedAt}, after the report's evaluatedAt ${evaluatedAt}; ` +
+                  `prior-final evidence MUST satisfy finalizedAt <= evaluatedAt.`
+              );
+            }
             participantKey = unitLocatorKey(satisfaction.unitLocator);
           } else {
             throw new MseViolation("Unknown admission satisfaction source.");
@@ -486,7 +589,26 @@ export function assertAdmissionCoverageWellFormed(
           if (seenSatisfactionUnits.has(participantKey)) {
             throw new MseViolation("Duplicate satisfaction evidence for one participating unit.");
           }
+          if (requiredParticipantKeys.size > 0 && !requiredParticipantKeys.has(participantKey)) {
+            throw new MseViolation(
+              `Satisfaction evidence for relation "${entry.relationId}" cites a participant ` +
+                `outside the required participant set this evaluation stated.`
+            );
+          }
           seenSatisfactionUnits.add(participantKey);
+        }
+      }
+      // Evidence must cover the stated required set EXACTLY. A subset is the
+      // omission Weston identified on UCP #799: PASSED citing one of two
+      // required participants must not validate.
+      if (requiredParticipantKeys.size > 0) {
+        const uncovered = [...requiredParticipantKeys].filter(key => !seenSatisfactionUnits.has(key));
+        if (uncovered.length > 0) {
+          throw new MseViolation(
+            `PASSED coverage for relation "${entry.relationId}" cites satisfaction for ` +
+              `${seenSatisfactionUnits.size} of ${requiredParticipantKeys.size} required ` +
+              `participants; evidence MUST cover the required participant set exactly.`
+          );
         }
       }
     }
@@ -527,7 +649,7 @@ export function assertAdmissionReportWellFormed(
   if (!isIsoDateTime(report.evaluatedAt)) {
     throw new MseViolation(`AdmissionReport evaluatedAt MUST be an ISO 8601 timestamp.`);
   }
-  assertAdmissionCoverageWellFormed(quote, report.failures, report.coverage);
+  assertAdmissionCoverageWellFormed(quote, report.failures, report.coverage, report.evaluatedAt);
 }
 
 /**
@@ -634,12 +756,124 @@ export function assertAdmissionRefusalWellFormed(
   }
 }
 
-/** Validates the admission/commit response split against its quote context. */
+/**
+ * Derives the execution-time realization of every satisfaction record in a
+ * successful admission report, by correlating it with the `unitResults` of
+ * the CommitResult in the same response.
+ *
+ * This is the UCP #799 contradiction Weston identified: at admission a
+ * CURRENT_REQUEST satisfier has only been *requested*, which is the same
+ * not-yet-final condition the PRIOR_FINAL_TRANSITION branch excludes. A
+ * caller acceptance constraint can then refuse exactly that unit, leaving a
+ * PASSED record whose evidence the same response reports as REFUSED.
+ *
+ * The derivation is total and deterministic (spec §3.2a):
+ *
+ * - CURRENT_REQUEST + APPLIED        -> REALIZED
+ * - CURRENT_REQUEST + REFUSED        -> NOT_REALIZED
+ * - CURRENT_REQUEST + INDETERMINATE  -> INDETERMINATE
+ * - PRIOR_FINAL_TRANSITION           -> REALIZED (already final by §3.2)
+ *
+ * It does NOT change admission-time truth: `PASSED` still means the required
+ * transition was present when admission was evaluated, and is not rewritten.
+ * It imposes no ordering and no atomicity: nothing here requires a dependent
+ * unit to wait for its satisfier to become APPLIED (spec §1d).
+ */
+export function deriveSatisfactionRealization(
+  report: AdmissionReport,
+  result: CommitResult
+): SatisfactionRealizationReport {
+  const outcomeByUnitRef = new Map(result.unitResults.map(unit => [unit.unitRef, unit.outcome]));
+  const entries: SatisfactionRealizationEntry[] = [];
+
+  for (const entry of report.coverage) {
+    if (entry.status !== "PASSED" || !entry.satisfactions) continue;
+    for (const satisfaction of entry.satisfactions) {
+      if (satisfaction.source === "PRIOR_FINAL_TRANSITION") {
+        // Realized. A prior-final record is only admissible when the cited
+        // transition is already final, so the satisfaction occurred; `source`
+        // distinguishes historical from current-request realization. It
+        // carries no `outcome` because this response did not execute it.
+        entries.push({
+          relationId: entry.relationId,
+          source: "PRIOR_FINAL_TRANSITION",
+          unitLocator: satisfaction.unitLocator,
+          realization: "REALIZED",
+        });
+        continue;
+      }
+      const outcome = outcomeByUnitRef.get(satisfaction.unitRef);
+      if (outcome === undefined) {
+        throw new MseViolation(
+          `Current-request satisfaction for relation "${entry.relationId}" cites unit ` +
+            `"${satisfaction.unitRef}", which has no UnitResult in the correlated CommitResult; ` +
+            `execution-time realization cannot be determined.`
+        );
+      }
+      const realization: SatisfactionRealization =
+        outcome === "APPLIED" ? "REALIZED" : outcome === "REFUSED" ? "NOT_REALIZED" : "INDETERMINATE";
+      entries.push({
+        relationId: entry.relationId,
+        source: "CURRENT_REQUEST",
+        unitRef: satisfaction.unitRef,
+        realization,
+        outcome,
+      });
+    }
+  }
+
+  return {
+    quoteId: report.quoteId,
+    entries,
+    allRealized: entries.every(entry => entry.realization === "REALIZED"),
+  };
+}
+
+/**
+ * Throws if a supplied realization report disagrees with what
+ * `deriveSatisfactionRealization` derives from the same response. Like
+ * `assertAggregateHintConsistent`, this exists so a derived summary cannot
+ * contradict the authoritative data it was derived from.
+ */
+export function assertSatisfactionRealizationConsistent(
+  report: AdmissionReport,
+  result: CommitResult,
+  claimed: SatisfactionRealizationReport
+): void {
+  const derived = deriveSatisfactionRealization(report, result);
+  const normalize = (value: SatisfactionRealizationReport) => ({
+    quoteId: value.quoteId,
+    allRealized: value.allRealized,
+    entries: [...value.entries]
+      .map(entry => JSON.stringify(entry))
+      .sort(),
+  });
+  if (JSON.stringify(normalize(claimed)) !== JSON.stringify(normalize(derived))) {
+    throw new MseViolation(
+      "Claimed satisfaction realization disagrees with the derivation from this response's " +
+        "coverage and unitResults."
+    );
+  }
+}
+
+/**
+ * Validates the admission/commit response split against its quote context.
+ *
+ * On the COMMIT_RESULT branch this RETURNS the derived satisfaction
+ * realization, so the §3.2a correlation is part of the standard validation
+ * path rather than an optional utility a consumer might never call. A
+ * consumer that validates a response therefore receives the execution-time
+ * reading without opting in, and cannot accidentally read admission `PASSED`
+ * as realized satisfaction just by skipping a helper.
+ *
+ * Returns undefined for ADMISSION_REFUSED, where no execution occurred and
+ * realization is not a meaningful question.
+ */
 export function assertCommitResponseWellFormed(
   quote: MutationQuote,
   proposal: MutationProposal,
   response: CommitResponse
-): void {
+): SatisfactionRealizationReport | undefined {
   if (!response || typeof response !== "object") {
     throw new MseViolation("CommitResponse is required.");
   }
@@ -648,7 +882,7 @@ export function assertCommitResponseWellFormed(
       throw new MseViolation("ADMISSION_REFUSED requires an admissionRefusal.");
     }
     assertAdmissionRefusalWellFormed(quote, proposal, response.admissionRefusal);
-    return;
+    return undefined;
   }
   if (response.kind !== "COMMIT_RESULT") {
     throw new MseViolation("Unknown CommitResponse kind.");
@@ -664,6 +898,17 @@ export function assertCommitResponseWellFormed(
     throw new MseViolation("COMMIT_RESULT does not correlate to the evaluated quote.");
   }
   assertCommitResultCoversAllUnits(quote, response.commitResult);
+  // With a COMMIT_RESULT available, every CURRENT_REQUEST satisfaction record
+  // MUST be correlatable with its unit's execution outcome, so an admitted
+  // pass cannot be read as an execution-time realized satisfaction when the
+  // same response refuses the satisfier. This rejects a record whose cited
+  // unit has no result; it does not refuse the response merely because a
+  // satisfier was REFUSED or INDETERMINATE, which remains a legitimate
+  // non-atomic outcome (spec §1d/§3.2a).
+  //
+  // The verdicts are RETURNED rather than discarded, so the consumer
+  // obligation in §3.2a is discharged by the standard validation path.
+  return deriveSatisfactionRealization(response.admissionReport, response.commitResult);
 }
 
 /**

@@ -1,0 +1,158 @@
+{
+  "quote": {
+    "quoteId": "quote_unrealized_1",
+    "target": {
+      "orderId": "order_799"
+    },
+    "snapshot": {
+      "orderVersion": 7
+    },
+    "commitConsistency": "SNAPSHOT_REQUIRED",
+    "units": [
+      {
+        "unitRef": "proposal_unrealized_1:unit:1",
+        "unitLocator": {
+          "scopeRef": "retail:order_799",
+          "unitKey": "goods_1"
+        },
+        "transition": {
+          "unitKey": "goods_1",
+          "operation": "REDEEM"
+        },
+        "effects": [
+          {
+            "effectId": "proposal_unrealized_1:goods_1:cost",
+            "type": "retail:transition_cost",
+            "value": {
+              "type": "money",
+              "amount": "0.00",
+              "currency": "USD"
+            },
+            "guarantee": {
+              "mode": "EXACT"
+            }
+          }
+        ]
+      },
+      {
+        "unitRef": "proposal_unrealized_1:unit:2",
+        "unitLocator": {
+          "scopeRef": "retail:order_799",
+          "unitKey": "delivery"
+        },
+        "transition": {
+          "unitKey": "delivery",
+          "operation": "REDEEM"
+        },
+        "effects": [
+          {
+            "effectId": "proposal_unrealized_1:delivery:cost",
+            "type": "retail:transition_cost",
+            "value": {
+              "type": "money",
+              "amount": "0.00",
+              "currency": "USD"
+            },
+            "guarantee": {
+              "mode": "EXACT"
+            }
+          }
+        ]
+      }
+    ],
+    "admissionRelations": [
+      {
+        "relationId": "retail:goods_redeem_requires_delivery_redeem",
+        "type": "REQUIRES_COINCLUSION",
+        "triggerUnitRefs": [
+          "proposal_unrealized_1:unit:1"
+        ],
+        "scopeRef": "retail:order_799",
+        "passEvidence": "REQUIRED"
+      }
+    ]
+  },
+  "commitRequest": {
+    "quoteId": "quote_unrealized_1",
+    "acceptanceConstraints": [
+      {
+        "effectId": "proposal_unrealized_1:delivery:cost",
+        "operator": "<=",
+        "value": {
+          "type": "money",
+          "amount": "-1.00",
+          "currency": "USD"
+        }
+      }
+    ]
+  },
+  "commitResponse": {
+    "kind": "COMMIT_RESULT",
+    "admissionReport": {
+      "quoteId": "quote_unrealized_1",
+      "proposalId": "proposal_unrealized_1",
+      "evaluatedAt": "2026-09-17T18:00:00Z",
+      "stateRef": {
+        "orderVersion": 7
+      },
+      "failures": [],
+      "coverage": [
+        {
+          "relationId": "retail:goods_redeem_requires_delivery_redeem",
+          "status": "PASSED",
+          "satisfactions": [
+            {
+              "source": "CURRENT_REQUEST",
+              "unitRef": "proposal_unrealized_1:unit:2",
+              "transition": {
+                "unitKey": "delivery",
+                "operation": "REDEEM"
+              }
+            }
+          ],
+          "requiredParticipants": [
+            {
+              "unitLocator": {
+                "scopeRef": "retail:order_799",
+                "unitKey": "delivery"
+              },
+              "transition": {
+                "unitKey": "delivery",
+                "operation": "REDEEM"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "commitResult": {
+      "quoteId": "quote_unrealized_1",
+      "unitResults": [
+        {
+          "unitRef": "proposal_unrealized_1:unit:1",
+          "outcome": "APPLIED",
+          "committedEffects": [
+            {
+              "effectId": "proposal_unrealized_1:goods_1:cost",
+              "type": "retail:transition_cost",
+              "value": {
+                "type": "money",
+                "amount": "0.00",
+                "currency": "USD"
+              },
+              "guarantee": {
+                "mode": "EXACT"
+              }
+            }
+          ]
+        },
+        {
+          "unitRef": "proposal_unrealized_1:unit:2",
+          "outcome": "REFUSED",
+          "refusalReason": "CONSTRAINT_VIOLATED"
+        }
+      ],
+      "aggregateHint": "MIXED"
+    }
+  }
+}

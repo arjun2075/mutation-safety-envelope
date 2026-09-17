@@ -9,6 +9,7 @@ import type {
   AdmissionRelation,
   MutationProposal,
   MutationQuote,
+  AdmissionRequiredParticipant,
   RequiredTransition,
   UnitLocator,
 } from "../../src/core/types";
@@ -230,6 +231,17 @@ export function createRetailQuoter(readState: RetailStateReader): Quoter {
   };
 }
 
+function requiredParticipant(
+  orderId: string,
+  unitKey: string,
+  operation: RetailOperation
+): AdmissionRequiredParticipant {
+  return {
+    unitLocator: locator(orderId, unitKey),
+    transition: { unitKey, operation } satisfies RetailTransition,
+  };
+}
+
 function requiredTransition(
   orderId: string,
   unitKey: string,
@@ -318,6 +330,13 @@ export function createRetailAdmissionEvaluator(readState: RetailStateReader): Ad
             relationId: relation.relationId,
             status: "PASSED",
             ...(satisfactions.length > 0 ? { satisfactions } : {}),
+            ...(requiredGoods.length > 0
+              ? {
+                  requiredParticipants: requiredGoods.map(unitKey =>
+                    requiredParticipant(orderId, unitKey, "CANCEL")
+                  ),
+                }
+              : {}),
           });
         }
       }
@@ -344,6 +363,7 @@ export function createRetailAdmissionEvaluator(readState: RetailStateReader): Ad
             relationId: relation.relationId,
             status: "PASSED",
             satisfactions: [currentSatisfaction("delivery", included)],
+            requiredParticipants: [requiredParticipant(orderId, "delivery", "REDEEM")],
           });
         } else {
           const prior = priorFinalSatisfaction("delivery", "REDEEM");
@@ -352,6 +372,7 @@ export function createRetailAdmissionEvaluator(readState: RetailStateReader): Ad
               relationId: relation.relationId,
               status: "PASSED",
               satisfactions: [prior],
+              requiredParticipants: [requiredParticipant(orderId, "delivery", "REDEEM")],
             });
             continue;
           }

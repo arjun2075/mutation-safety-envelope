@@ -3,8 +3,9 @@ import Ajv2020 from "ajv/dist/2020.js";
 import addFormats from "ajv-formats";
 import schema from "../schema/mse-core.schema.json";
 import { ReferenceProvider, type AdmissionEvaluator } from "../src/core/reference-provider";
-import { assertAdmissionCoverageWellFormed, assertAdmissionRefusalWellFormed, assertCommitResultCoversAllUnits } from "../src/core/validate";
-import type { AdmissionCoverage, AdmissionRefusal, MutationProposal } from "../src/core/types";
+import { readFileSync } from "node:fs";
+import { assertAdmissionCoverageWellFormed, assertAdmissionRefusalWellFormed, assertCommitResultCoversAllUnits, assertCommitResponseWellFormed, deriveSatisfactionRealization } from "../src/core/validate";
+import type { AdmissionCoverage, AdmissionRefusal, CommitResponse, MutationProposal, MutationQuote } from "../src/core/types";
 import { amend, authorized, evaluate, initial, items, orders, quoter, scope } from "./bindings/merchant-batch";
 
 const ajv = new Ajv2020({ strict: true, allErrors: true });
@@ -297,5 +298,62 @@ describe("schema and semantic coverage negatives", () => {
     const quote = provider.quote(initial());
     expect(() => provider.commit({ quoteId: quote.quoteId, acceptanceConstraints: [] })).toThrow(/omits/);
     expect(dispatches()).toBe(0);
+  });
+});
+
+describe("published counterexample fixture is executable (UCP #799)", () => {
+  const fixture = JSON.parse(
+    readFileSync(
+      new URL("../examples/retail/unrealized-satisfaction.fixture.json", import.meta.url),
+      "utf-8"
+    )
+  ) as {
+    quote: MutationQuote;
+    commitRequest: { quoteId: string };
+    commitResponse: Extract<CommitResponse, { kind: "COMMIT_RESULT" }>;
+  };
+
+  const proposal: MutationProposal = {
+    proposalId: fixture.commitResponse.admissionReport.proposalId,
+    target: fixture.quote.target,
+    change: {
+      transitions: [
+        { unitKey: "goods_1", operation: "REDEEM" },
+        { unitKey: "delivery", operation: "REDEEM" },
+      ],
+    },
+  };
+
+  it("validates as a conformant response despite the refused satisfier", () => {
+    expect(() =>
+      assertCommitResponseWellFormed(fixture.quote, proposal, fixture.commitResponse)
+    ).not.toThrow();
+  });
+
+  it("derives NOT_REALIZED for the refused delivery satisfier", () => {
+    const realization = deriveSatisfactionRealization(
+      fixture.commitResponse.admissionReport,
+      fixture.commitResponse.commitResult
+    );
+    expect(realization.allRealized).toBe(false);
+    expect(realization.entries).toEqual([
+      {
+        relationId: "retail:goods_redeem_requires_delivery_redeem",
+        source: "CURRENT_REQUEST",
+        unitRef: "proposal_unrealized_1:unit:2",
+        realization: "NOT_REALIZED",
+        outcome: "REFUSED",
+      },
+    ]);
+  });
+
+  it("keeps the admission entry PASSED and the goods unit APPLIED", () => {
+    const entry = fixture.commitResponse.admissionReport.coverage[0];
+    expect(entry.status).toBe("PASSED");
+    expect(
+      fixture.commitResponse.commitResult.unitResults.find(
+        unit => unit.unitRef === "proposal_unrealized_1:unit:1"
+      )?.outcome
+    ).toBe("APPLIED");
   });
 });

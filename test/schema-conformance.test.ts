@@ -437,3 +437,106 @@ describe("v0.4.0-dev.0 admission report and satisfaction evidence", () => {
     expect(validate({ commitResponse: incompatible })).toBe(false);
   });
 });
+
+describe("required participant sets on PASSED coverage (UCP #799 completeness)", () => {
+  const passedEntry = (overrides: Record<string, unknown> = {}) => ({
+    commitResponse: {
+      kind: "COMMIT_RESULT",
+      admissionReport: {
+        quoteId: "q-participants",
+        proposalId: "p-participants",
+        evaluatedAt: "2026-09-17T20:00:00Z",
+        failures: [],
+        coverage: [{
+          relationId: "retail:gate",
+          status: "PASSED",
+          satisfactions: [{
+            source: "CURRENT_REQUEST",
+            unitRef: "u-delivery",
+            transition: { operation: "REDEEM" },
+          }],
+          requiredParticipants: [{
+            unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+            transition: { operation: "REDEEM" },
+          }],
+          ...overrides,
+        }],
+      },
+      commitResult: {
+        quoteId: "q-participants",
+        unitResults: [{ unitRef: "u-delivery", outcome: "APPLIED", committedEffects: [] }],
+      },
+    },
+  });
+
+  it("accepts a PASSED entry carrying its required participant set", () => {
+    expect(validate(passedEntry())).toBe(true);
+  });
+
+  it("accepts a two-participant required set", () => {
+    expect(validate(passedEntry({
+      requiredParticipants: [
+        { unitLocator: { scopeRef: "retail:order", unitKey: "goods_1" }, transition: { operation: "CANCEL" } },
+        { unitLocator: { scopeRef: "retail:order", unitKey: "goods_2" }, transition: { operation: "CANCEL" } },
+      ],
+    }))).toBe(true);
+  });
+
+  it("rejects an empty required participant set", () => {
+    expect(validate(passedEntry({ requiredParticipants: [] }))).toBe(false);
+  });
+
+  it("rejects a duplicated required participant", () => {
+    const participant = {
+      unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+      transition: { operation: "REDEEM" },
+    };
+    expect(validate(passedEntry({
+      requiredParticipants: [participant, structuredClone(participant)],
+    }))).toBe(false);
+  });
+
+  it("rejects a required participant with no unitLocator or no transition", () => {
+    expect(validate(passedEntry({
+      requiredParticipants: [{ transition: { operation: "REDEEM" } }],
+    }))).toBe(false);
+    expect(validate(passedEntry({
+      requiredParticipants: [{ unitLocator: { scopeRef: "retail:order", unitKey: "delivery" } }],
+    }))).toBe(false);
+  });
+
+  it("rejects an unknown field on a required participant", () => {
+    expect(validate(passedEntry({
+      requiredParticipants: [{
+        unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+        transition: { operation: "REDEEM" },
+        finalizedAt: "2026-09-17T19:00:00Z",
+      }],
+    }))).toBe(false);
+  });
+
+  it("rejects requiredParticipants on a FAILED or DEFERRED entry", () => {
+    const failed = passedEntry();
+    failed.commitResponse.admissionReport.coverage[0] = {
+      relationId: "retail:gate",
+      status: "FAILED",
+      requiredParticipants: [{
+        unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+        transition: { operation: "REDEEM" },
+      }],
+    } as never;
+    expect(validate(failed)).toBe(false);
+
+    const deferred = passedEntry();
+    deferred.commitResponse.admissionReport.coverage[0] = {
+      relationId: "retail:gate",
+      status: "DEFERRED",
+      dependsOn: ["retail:other"],
+      requiredParticipants: [{
+        unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+        transition: { operation: "REDEEM" },
+      }],
+    } as never;
+    expect(validate(deferred)).toBe(false);
+  });
+});

@@ -17,6 +17,7 @@
  */
 
 import type {
+  SatisfactionRealizationReport,
   AdmissionFailure,
   AdmissionCoverage,
   AdmissionReport,
@@ -41,6 +42,7 @@ import {
   assertAdmissionRefusalWellFormed,
   assertAdmissionReportWellFormed,
   computeAggregateHint,
+  deriveSatisfactionRealization,
   MseViolation,
 } from "./validate";
 
@@ -135,6 +137,8 @@ export class ReferenceProvider {
   private unitResultsByQuoteId = new Map<string, UnitResult[]>();
   /** Pending indeterminate units, keyed by the Reconciliation.correlationId this provider issued. */
   private pendingByCorrelationId = new Map<string, PendingReconciliation>();
+  /** Successful admission reports, retained so realization stays derivable post-commit. */
+  private admissionReportsByQuoteId = new Map<string, SuccessfulAdmissionReport>();
 
   constructor(
     private readonly quoter: Quoter,
@@ -218,6 +222,7 @@ export class ReferenceProvider {
       ...admissionReport,
       failures: [],
     };
+    this.admissionReportsByQuoteId.set(quote.quoteId, successfulAdmissionReport);
 
     if (isQuoteExpired(quote, now)) {
       const unitResults: UnitResult[] = quote.units.map((u) => ({
@@ -305,6 +310,30 @@ export class ReferenceProvider {
         aggregateHint: computeAggregateHint(unitResults),
       },
     };
+  }
+
+  /**
+   * The §3.2a execution-time realization of a committed quote's
+   * current-request satisfaction evidence.
+   *
+   * This exists so the consumer obligation is dischargeable from the
+   * reference implementation itself, rather than only from a validator a
+   * caller might not run: a consumer holding a quoteId can ask what the
+   * admission evidence actually amounted to after execution. Returns
+   * undefined when this provider has no commit result for the quote, in
+   * which case a caller MUST NOT upgrade admission evidence to realized
+   * satisfaction.
+   */
+  satisfactionRealization(quoteId: string): SatisfactionRealizationReport | undefined {
+    const quote = this.quotesById.get(quoteId);
+    const report = this.admissionReportsByQuoteId.get(quoteId);
+    const unitResults = this.unitResultsByQuoteId.get(quoteId);
+    if (!quote || !report || !unitResults) return undefined;
+    return deriveSatisfactionRealization(report, {
+      quoteId,
+      unitResults,
+      aggregateHint: computeAggregateHint(unitResults),
+    });
   }
 
   /**

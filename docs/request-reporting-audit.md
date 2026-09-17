@@ -113,6 +113,14 @@ and actual runner counts.
 | Per-unit determinacy | New aggregate-repair mixed result plus unchanged core per-unit coverage tests |
 | Read-based reconciliation | New mixed case and unchanged core G/H/I cases |
 | Effect finality remains distinct | Unchanged core J (APPLIED with PENDING effect), receipt coverage tests |
+| Current-request evidence is not execution-time realization | Counterexample vectors: refused / indeterminate / applied delivery satisfier, plus the published `unrealized-satisfaction` fixture validated at runtime |
+| Correlation is automatic, not an optional utility | `assertCommitResponseWellFormed` returns the realization report; `ReferenceProvider.satisfactionRealization` answers post-commit; both return nothing when no outcome exists |
+| Prior-final evidence realizes rather than abstaining | Mixed relation realized from both sources under one verdict; realized historical half does not mask a refused current-request half |
+| Non-atomicity preserved under the new correlation | Explicit case asserting `goods_1` APPLIED while its declared satisfier is REFUSED |
+| Satisfaction evidence covers the required set exactly | Two-participant complete pass; subset-evidence rejection; out-of-set and malformed participant negatives |
+| Required set is independently grounded, not tautological | Both-arrays-shrunk forgery rejected by core; prior-history participant absent from the quote still accepted; forged prior-history participant rejected by retail trace conformance |
+| Prior-final time compared as instants, not strings | Same-instant/different-offset evidence accepted; genuinely later instant rejected |
+| Prior-final evidence is temporally consistent | `finalizedAt > evaluatedAt` rejection; equality and earlier-than acceptance; format check retained |
 
 ## Final verification
 
@@ -120,7 +128,7 @@ All commands below exited 0 after code/test changes:
 
 | Command | Actual result |
 | --- | --- |
-| `npm test` | **191 passed, 4 files**: core 78, retail admission 35, schema 45, request reporting 33 |
+| `npm test` | **228 passed, 4 files**: core 78, retail admission 61, schema 53, request reporting 36 |
 | `npm run build` | TypeScript compilation passed |
 | `npm run validate-schema` | AJV strict draft-2020-12 compilation passed |
 | `npm run test:baseline` | **2 passed** against recorded v0.3.0 core; 3 cycles/4 quotes reproduced |
@@ -132,9 +140,9 @@ package scripts are identical. A normal supported Node/npm installation can
 run the commands directly. `npm run test:baseline` requires the recorded base
 Git object and installed development dependencies.
 
-The two baseline characterization cases are **not included** in the 191-test
+The two baseline characterization cases are **not included** in the 228-test
 `npm test` result. They run separately because they compile against the
-recorded v0.3.0 core contract. Across the two test invocations, exactly **193
+recorded v0.3.0 core contract. Across the two test invocations, exactly **230
 test cases ran and passed**.
 
 Remaining limitations: provider traces can lie, observational hooks can hide

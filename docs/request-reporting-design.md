@@ -69,12 +69,50 @@ Stale reads of monotonic final state fail closed by rejecting; premature
 completion reporting can pass unsafely, so this narrows but does not solve the
 general snapshot/check-to-dispatch problem.
 
+## Execution-time realization of current-request evidence
+
+The same finality rule has a second half on the current-request branch. At
+admission a `CURRENT_REQUEST` satisfier has only been requested. Because
+acceptance constraints come from the caller, a caller can refuse exactly that
+unit and leave a `PASSED` record whose evidence the same response reports
+`REFUSED`.
+
+Two closures were available without atomicity. Ordered dispatch — a dependent
+unit dispatching only after its satisfiers are `APPLIED`, and refused
+otherwise — was rejected for core: it would turn `REQUIRES_COINCLUSION` into
+an ordering primitive and change execution semantics to fix a reporting
+defect. The chosen closure cross-checks `CURRENT_REQUEST` records against
+`unitResults` and reports realization separately, so the pass is not read at
+face value. Ordered dispatch remains a legitimate binding strategy, outside
+core.
+
+Admission-time `PASSED` is not overwritten, because the two facts differ:
+"admitted because requested" and "realized after execution". Realization is
+derived by validation from `coverage[].satisfactions` and
+`commitResult.unitResults`, both already on the wire, following the
+`aggregateHint` precedent of a non-authoritative derived summary with one
+deterministic rule and a `compute`/`assert` pair. No field is added to the
+admission entry, so a derived verdict cannot drift from the results it came
+from.
+
+Two smaller checks used data already present. A PASSED entry now states its
+complete `requiredParticipants` set, and evidence must cover it exactly, which
+rejects a pass citing one of two required goods cancellations. Prior-final
+evidence must satisfy `finalizedAt <= evaluatedAt`, comparing two timestamps
+that were both already on the report.
+
 ## Compatibility
 
 Recommend and use **0.4.0-dev.0**, after the executable decision gate, because
 required report coverage, the PASSED satisfaction union, relation evidence
-declarations, and required successful-path `admissionReport` change the closed
-wire schema, public TypeScript shape, and provider hook contract. This is a
+declarations, required `requiredParticipants` on evidence-required passes, and
+required successful-path `admissionReport` change the closed wire schema,
+public TypeScript shape, and provider hook contract. The
+`requiredParticipants` addition is additive in JSON Schema terms but a
+**breaking tightening of the validation contract**: previously valid
+development payloads that omit the set, state an incomplete set, or carry
+prior-final evidence finalized after `evaluatedAt` now fail. Consumers also
+acquire a normative correlation obligation (spec §3.2a). This is a
 breaking pre-1.0 minor development revision, not a published release. v0.3.0
 tags and historical documents remain unchanged. Migration: return actual
 coverage for every declared relation; provide dependencies for deferred
