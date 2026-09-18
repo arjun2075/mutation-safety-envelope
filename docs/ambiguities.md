@@ -265,7 +265,8 @@ compared with the `evaluatedAt` beside it.
 rewritten. When a `COMMIT_RESULT` is available, validation correlates every
 `CURRENT_REQUEST` record with its `unitResult` and derives realization
 (`APPLIED` realized, `REFUSED` not realized, `INDETERMINATE` indeterminate;
-prior-final evidence is not applicable). PASSED entries for evidence-required
+prior-final evidence is `REALIZED`, because such a record is admissible only
+when the cited transition is already final). PASSED entries for evidence-required
 relations now state the complete `requiredParticipants` set, which evidence
 must cover exactly, and prior-final evidence must satisfy
 `finalizedAt <= evaluatedAt`. See spec §3.2a.
@@ -276,12 +277,31 @@ once a `COMMIT_RESULT` exists, a consumer MUST correlate `CURRENT_REQUEST`
 evidence with `unitResults` before treating it as realized, and MUST NOT
 assume the favorable reading when it cannot correlate.
 
-Comparing evidence against a producer-supplied participant set would be
-tautological on its own, since a producer could omit a participant from both
-arrays. Core therefore derives a lower bound independently — every
-co-included non-trigger quoted unit in the relation's scope must appear in the
-stated set — and binding trace conformance validates the remainder, including
-participants satisfied by prior history that core cannot enumerate.
+Evidence must match its required participant by unit **and** transition, so a
+satisfaction for one transition cannot discharge a requirement for another on
+the same unit.
+
+Prior-final evidence may coexist with current activity on the same unit,
+including the same opaque transition value: `transitionRef` identifies the
+historical occurrence, and the protocol never declares transitions
+non-repeatable. The residual gap is therefore broader than a single shape: a
+producer can consistently change both the required participant and its
+prior-final evidence to a different historical transition that core can
+neither authenticate nor evaluate for sufficiency. A genuine prior
+transition coexisting with a different refused current transition on the
+same unit is *not* a contradiction, so core must not reject on the locator
+repeat alone.
+
+Semantic completeness of the stated set, however, is **not** something core
+can establish. An earlier revision of this work tried to derive a floor from
+shared `scopeRef` — treating every same-scope non-trigger quoted unit as a
+required participant — and that inference was wrong: `scopeRef` says where
+locators resolve, not which transitions participate. It rejected conforming
+proposals, including the amended proposal a binding's own COMPLETE witness
+produces. The floor was removed. Because `AdmissionRelation` carries no
+participant basis, a producer omitting a participant from both arrays leaves
+them mutually consistent and core cannot disprove it; binding trace
+conformance owns that property under the current relation shape.
 
 The realization verdict is derived, not carried as admission wire data, so it
 cannot drift from the `unitResults` it comes from. `REQUIRES_COINCLUSION`

@@ -38,10 +38,14 @@ function repairs(refusal: AdmissionRefusal) {
 /** Binding conformance oracle: evaluate real inputs, compare by relation identity. */
 function assertMerchantTrace(proposal: MutationProposal, refusal: AdmissionRefusal) {
   const expected = exhaustive(proposal, {} as never, new Date());
-  expect([...refusal.coverage].sort((a,b) => a.relationId.localeCompare(b.relationId)))
-    .toEqual([...expected.coverage].sort((a,b) => a.relationId.localeCompare(b.relationId)));
-  expect([...refusal.failures].sort((a,b) => a.relationId.localeCompare(b.relationId)))
-    .toEqual([...expected.failures].sort((a,b) => a.relationId.localeCompare(b.relationId)));
+  // Ordinal (code-unit) ordering, not locale collation: normalization must
+  // not depend on the machine's locale or Unicode collation behavior.
+  const byRelationId = <T extends { relationId: string }>(a: T, b: T) =>
+    a.relationId < b.relationId ? -1 : a.relationId > b.relationId ? 1 : 0;
+  expect([...refusal.coverage].sort(byRelationId))
+    .toEqual([...expected.coverage].sort(byRelationId));
+  expect([...refusal.failures].sort(byRelationId))
+    .toEqual([...expected.failures].sort(byRelationId));
 }
 
 describe("independent request-level reporting", () => {

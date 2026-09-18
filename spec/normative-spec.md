@@ -387,6 +387,12 @@ Each `AdmissionSatisfaction` is one branch of a closed discriminated union:
   `unitLocator`, opaque transition, stable non-empty `transitionRef`, and ISO
   8601 `finalizedAt`. It MUST NOT carry a quote-local `unitRef`.
 
+Transitions are opaque to the core. Where this specification requires two
+transitions to be equal, the comparison MUST be **structural**: JSON object
+member order is a serialization detail and MUST NOT affect identity, while
+array order remains semantic. An implementation MUST NOT compare transitions
+by naive serialization, and MUST NOT interpret any field inside one.
+
 Every participant MUST belong to the relation's declared scope. A
 current-request transition MUST match the cited quoted unit. One relation MUST
 NOT repeat satisfaction for the same binding-scoped unit, including once from
@@ -402,41 +408,89 @@ admission, not stable quote material (§1d). Each entry names a binding-scoped
 empty set, and out-of-scope participants are invalid; the field MUST NOT
 appear on a FAILED or DEFERRED entry.
 
+A required participant is the pair **(`unitLocator`, `transition`)**, not a
+locator alone. One relation MUST NOT state two required transitions for the
+same binding-scoped unit, so duplicate detection is locator-keyed, but the
+declared transition is part of what must be satisfied.
+
 When `requiredParticipants` is present, `satisfactions` MUST cover it
-**exactly**: every required participant MUST have a satisfaction record, and
-no record may cite a participant outside the set. A `PASSED` entry citing only
-a subset of its required participants is invalid. Without this, a pass that
-cites one of two required participants is indistinguishable on the wire from a
-complete one, and the omission is invisible to a reader.
+**exactly**. Every required participant MUST have a satisfaction record whose
+locator matches it **and** whose `transition` is structurally equal to the
+transition that participant was required to contribute. No record may cite a
+participant outside the set. A `PASSED` entry citing only a subset of its
+required participants is invalid, and evidence for the right unit carrying a
+different transition does **not** cover that participant: a satisfaction for
+one transition never discharges a requirement for another, even on the same
+unit. Without this, a pass that cites one of two required participants, or
+substitutes a different transition, is indistinguishable on the wire from a
+complete one.
 
-Checking `satisfactions` against `requiredParticipants` alone would be
-**tautological**, because both arrays come from the same producer: omitting a
-participant from both leaves them consistent with each other. The stated set
-MUST therefore also be grounded independently of the producer.
+### What core can and cannot establish here
 
-Wherever validation can derive a required participant from the quote and the
-relation declaration, the stated set MUST contain it. For
-`REQUIRES_COINCLUSION`, every quoted unit whose `unitLocator.scopeRef` equals
-the relation's `scopeRef` and which is not itself a trigger is such a
-participant: the relation asserts those transitions are admissible only
-together. A stated set omitting one of those units is invalid, and validation
-detects this with no domain knowledge.
+Core checks **internal correspondence**: that the stated set is well formed,
+that evidence matches it exactly by unit and transition, and that no record
+cites a transition other than the one required. It does not and cannot
+check that the stated set is the *semantically complete* set the relation
+actually required.
 
-That derivation is a **lower bound, not an equality**. The complete required
-set MAY additionally contain participants absent from the quote — the units a
-`PRIOR_FINAL_TRANSITION` record satisfies — and the domain-blind core cannot
-enumerate them, because only the binding knows which scoped units exist and
-which have already reached the state the gate concerns. Validation MUST NOT
-reject a stated participant merely for being absent from the quote.
+Core MUST NOT infer relation participation from shared scope. `scopeRef`
+declares where a locator is **resolved**; it does not assert that every
+transition inside that scope participates in every relation. A quote may
+legitimately carry an unrelated same-scope transition — for example a cancel
+on one unit alongside a redeem gate on another — and that unit is not a
+participant in the redeem relation. An implementation that treated every
+same-scope non-trigger quoted unit as required would reject conforming
+proposals, including the amended proposal a binding's own `COMPLETE` witness
+produces.
 
-For that remainder, and for any relation type whose required set core cannot
-derive at all, **binding trace conformance MUST validate that
+The current `AdmissionRelation` declaration carries `triggerUnitRefs` and
+`scopeRef` but **no participant basis**, so the required set is not derivable
+from the quote. This is an accepted boundary of this revision, not an
+oversight. Consequently a producer that omits a participant from both
+`requiredParticipants` and `satisfactions` leaves the two arrays mutually
+consistent, and core cannot disprove it.
+
+**Binding trace conformance MUST therefore validate that
 `requiredParticipants` equals the set the declared relation actually required
-at the evaluated state.** A binding that does not re-derive the required set
-leaves the completeness check resting on producer self-consistency for the
-part core cannot see. The retail binding discharges this by re-evaluating the
-gates against real state and comparing full coverage, including the stated
-participant sets.
+at the evaluated state.** Semantic completeness of the stated set is a
+binding obligation unless and until a future revision gives the quote
+relation an explicit participant basis. The retail binding discharges it by
+re-evaluating its gates against real state and comparing full coverage,
+including the stated participant sets.
+
+#### Prior-final evidence may coexist with current activity on the same unit
+
+A `PRIOR_FINAL_TRANSITION` record MAY cite a `unitLocator` that the current
+quote also carries, **including with the same opaque `transition` value**.
+Validation MUST NOT reject a record on either ground.
+
+The reason is what identifies a historical occurrence. `unitLocator`
+identifies the domain unit. `transition` is an opaque operation value whose
+meaning is binding-owned, and this specification nowhere declares
+transitions unique or non-repeatable for a unit. `transitionRef` is the
+field that identifies the occurrence. A unit supporting a repeatable
+operation may therefore have a genuinely final occurrence in its history
+and a freshly requested transition of the same shape in this quote; the two
+are distinct events, and the current one failing says nothing about the
+historical one.
+
+Consequently "no outcome in this response" (§3.2a) means **the cited
+historical occurrence has no `unitResult` in this response**, not that the
+locator is absent from the quote.
+
+This is deliberately not the alternative, source-exclusive model, in which
+`PRIOR_FINAL_TRANSITION` would be permitted only for locators absent from
+the quote. That model is coherent, but it would forbid reasserting a
+repeatable transition and would require this specification to declare
+transitions non-repeatable per unit, which no binding evidence supports.
+
+The cost is explicit: a non-conformant producer may relabel a
+current-request satisfier as prior final history, and core will accept it.
+Core cannot detect this, because it holds the quote but not the unit's
+history, and because a producer blocked from reusing one transition value
+can simply cite another. Authenticating that a cited occurrence really
+happened is therefore wholly a binding trace-conformance obligation, for
+this and every other false-history claim.
 
 `PRIOR_FINAL_TRANSITION` evidence MUST additionally satisfy `finalizedAt <=
 evaluatedAt` on the report that cites it. Evidence cannot have become final
@@ -453,7 +507,10 @@ error mechanism; it MUST NOT invent a known admission failure. In particular,
 absence of an evaluator is not an UNAVAILABLE repair witness.
 
 `coverage` and `failures` are correlated by relation identity; `dependsOn`
-is a set of relation identities and `satisfactions` a set of participants.
+is a set of relation identities, `satisfactions` a set of participants,
+`requiredParticipants` a set of required participants, and a witness's
+`requiredTransitions` a set of units that must be added to repair the
+relation — it names what is missing, never an order in which to add it.
 Their array order carries no semantic meaning. Providers SHOULD use
 stable ordering for reproducible diagnostics, while callers and validators
 MUST NOT infer evaluation order, dependency priority, or result meaning from
@@ -495,7 +552,9 @@ carry exactly one explicit witness disposition:
 
 - `COMPLETE` MUST include a non-empty `requiredTransitions` list that is
   sufficient to construct an amendment for **that relation at that
-  evaluated state**;
+  evaluated state**. The list is a set: its order is not semantic, and a
+  conformance comparison MUST NOT treat a permutation of it as a different
+  witness;
 - `PARTIAL` MUST include a non-empty informative list, but the provider
   MUST NOT advertise it as sufficient for local repair;
 - `UNAVAILABLE` carries no transition list because the provider cannot
@@ -594,10 +653,20 @@ cites. The correlation is total and deterministic:
 | `PRIOR_FINAL_TRANSITION` | none in this response | `REALIZED` |
 
 A `PRIOR_FINAL_TRANSITION` record is `REALIZED` and carries no correlated
-outcome. Such a record is admissible only when the cited transition is
-already final, so its satisfaction demonstrably occurred; it occurred
-historically rather than in this request, and the record's `source` already
-carries that distinction. Reporting it as inapplicable would withhold a
+outcome, **conditional on a binding-owned claim core does not verify**. The
+division is:
+
+- core validates the record STRUCTURALLY: source shape, participant scope,
+  the transition's correspondence to the asserted required participant,
+  `finalizedAt` format, and `finalizedAt <= evaluatedAt`;
+- the binding authenticates it SEMANTICALLY: that the cited `transitionRef`
+  resolves to a real historical occurrence with that transition and
+  finalization instant, and that the occurrence satisfies the relation.
+
+Given a conformant binding, the satisfaction occurred historically rather
+than in this request, which is why it realizes; the record's `source`
+carries that distinction. Core accepting a prior-final record is NOT by
+itself evidence that the cited history happened. Reporting it as inapplicable would withhold a
 verdict in the case where the evidence is strongest, and would collide with
 the separate `NOT_APPLICABLE` admission coverage status this revision
 deliberately did not add.
@@ -654,10 +723,44 @@ question after commit. Both return nothing when no execution outcome is
 available, which is the fail-closed case above and never permission to assume
 the favorable reading.
 
+A derived aggregate over these entries MUST be non-vacuous: "all realized"
+holds only when there is at least one entry **and** every entry is
+`REALIZED`. An empty entry set MUST NOT report as fully realized, because a
+response that evidenced nothing has realized nothing; reporting otherwise
+would invert the fail-closed reading this section requires.
+
+The scope of that aggregate is **the satisfaction records present in the
+report**, not the set of admission relations. A relation that passed without
+supplying satisfaction evidence contributes no realization entry and is
+therefore neither counted nor vouched for. A report carrying one
+evidence-bearing realized relation alongside one evidence-free passed
+relation aggregates to "all realized", and that verdict says nothing
+whatever about the second relation. A consumer MUST NOT read the aggregate
+as proof that every gate was realized, and MUST inspect `coverage` to learn
+which relations supplied evidence at all.
+
+Nor is the aggregate a statement about commit success. A request admitted
+entirely on prior final history, whose quote then expires before dispatch,
+yields `ALL_REFUSED` per-unit outcomes and a fully realized satisfaction
+aggregate in the same response. Both are correct: nothing committed, and
+the cited historical satisfaction still occurred. A consumer asking whether
+the mutation succeeded MUST read `unitResults` (§1b, §1c), never this
+aggregate.
+
 `NOT_REALIZED` and `INDETERMINATE` are **not** response-level errors. They are
 the ordinary consequence of non-atomic execution (§1d) and MUST NOT cause a
 conformant response to be rejected. What they forbid is a reader taking the
 pass at face value.
+
+A realization entry is not self-describing. It carries the relation, the
+source, and the participant, but not the satisfaction's transition, so it
+identifies its satisfaction only together with the `AdmissionReport` it was
+derived from. Within one report the tuple (`relationId`, `source`,
+participant) is unique, because a relation MUST NOT repeat satisfaction for
+one binding-scoped unit, so a prior transition A and a different current
+transition B on the same unit remain distinguishable when correlated
+properly. Consumers MUST join on that tuple rather than assume an entry
+stands alone.
 
 Like `aggregateHint` (§1c), this correlation is **non-authoritative and purely
 derived**: it is computed from `coverage[].satisfactions` and
@@ -1219,7 +1322,10 @@ validated under the earlier `0.4.0-dev.0` state can now fail:
 
 - a `PASSED` entry for a relation declaring `passEvidence: REQUIRED` that
   omits `requiredParticipants` is now invalid;
-- a stated set that omits a co-included quoted unit is now invalid;
+- evidence citing the right unit with a different transition than that
+  participant was required to contribute is now invalid;
+- prior-final evidence whose `finalizedAt` is after the report's
+  `evaluatedAt` is now invalid (unchanged from the previous revision);
 - satisfaction evidence that does not cover the stated set exactly is now
   invalid; and
 - `PRIOR_FINAL_TRANSITION` evidence with `finalizedAt` after the report's

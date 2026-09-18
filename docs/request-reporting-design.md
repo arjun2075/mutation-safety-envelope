@@ -96,10 +96,28 @@ admission entry, so a derived verdict cannot drift from the results it came
 from.
 
 Two smaller checks used data already present. A PASSED entry now states its
-complete `requiredParticipants` set, and evidence must cover it exactly, which
-rejects a pass citing one of two required goods cancellations. Prior-final
-evidence must satisfy `finalizedAt <= evaluatedAt`, comparing two timestamps
-that were both already on the report.
+complete `requiredParticipants` set, and evidence must cover it exactly by
+unit **and** transition, which rejects a pass citing one of two required
+goods cancellations and a pass substituting a different transition on the
+right unit. Prior-final evidence must satisfy `finalizedAt <= evaluatedAt`,
+comparing two timestamps that were both already on the report, as parsed
+instants rather than ISO strings.
+
+Core establishes internal correspondence only. An earlier iteration also
+tried to derive a participant floor from shared `scopeRef`; that inference
+was invalid, because `scopeRef` says where locators resolve rather than which
+transitions participate, and it rejected conforming proposals including the
+binding's own COMPLETE-witness amendment. It was removed. Under the current
+`AdmissionRelation` shape, which carries no participant basis, semantic
+completeness of the stated set is a binding trace-conformance obligation.
+
+Prior-final evidence, by contrast, may coexist with current activity on the
+same unit, including the same opaque transition value. `transitionRef`
+identifies a historical occurrence; `transition` is an opaque operation the
+protocol never declares non-repeatable. A short-lived rule rejecting that
+pair was removed because it falsely rejected truthful reports about
+repeatable operations while blocking only one spelling of a forgery that
+has unlimited spellings. Authenticating history is binding work.
 
 ## Compatibility
 

@@ -36,6 +36,8 @@ import type {
   Reconciliation,
 } from "./types";
 import {
+  canonicalJson,
+  deepJsonEqual,
   evaluateAcceptanceConstraints,
   isQuoteExpired,
   assertQuoteUnitsWellFormed,
@@ -147,9 +149,17 @@ export class ReferenceProvider {
     private readonly admission?: AdmissionEvaluator
   ) {}
 
-  /** Registers (or updates) the current snapshot reference for a target resource. */
+  /**
+   * Registers (or updates) the current snapshot reference for a target
+   * resource.
+   *
+   * The target is keyed by `canonicalJson`, not raw `JSON.stringify`, so a
+   * caller that builds an equivalent target object with its members in a
+   * different order addresses the same entry rather than silently creating
+   * a second one. Snapshot COMPARISON is likewise structural (see commit()).
+   */
   setSnapshot(target: unknown, snapshot: unknown): void {
-    this.snapshotsByTarget.set(JSON.stringify(target), snapshot);
+    this.snapshotsByTarget.set(canonicalJson(target), snapshot);
   }
 
   /** Step 1: Proposal -> Quote; retains proposal context for admission. */
@@ -230,6 +240,12 @@ export class ReferenceProvider {
         outcome: "REFUSED",
         refusalReason: "QUOTE_EXPIRED",
       }));
+      // Persist, exactly as the snapshot-mismatch and normal paths do. This
+      // branch previously returned without recording, so receipt() and
+      // satisfactionRealization() lost the outcome of a real COMMIT_RESULT
+      // and a reader could not tell an expired-refusal from a quote that
+      // never committed.
+      this.unitResultsByQuoteId.set(quote.quoteId, unitResults);
       return {
         kind: "COMMIT_RESULT",
         admissionReport: successfulAdmissionReport,
@@ -242,8 +258,11 @@ export class ReferenceProvider {
     }
 
     if (quote.commitConsistency === "SNAPSHOT_REQUIRED") {
-      const current = this.snapshotsByTarget.get(JSON.stringify(quote.target));
-      if (JSON.stringify(current) !== JSON.stringify(quote.snapshot)) {
+      const current = this.snapshotsByTarget.get(canonicalJson(quote.target));
+      // Structural comparison: a snapshot is an opaque provider-defined
+      // value, so member order is not drift. Raw serialization here would
+      // report SNAPSHOT_MISMATCH for a semantically identical snapshot.
+      if (!deepJsonEqual(current, quote.snapshot)) {
         const unitResults: UnitResult[] = quote.units.map((u) => ({
           unitRef: u.unitRef,
           outcome: "REFUSED",

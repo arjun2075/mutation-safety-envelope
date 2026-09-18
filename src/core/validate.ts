@@ -379,7 +379,184 @@ function assertUnitLocatorWellFormed(locator: UnitLocator, context: string): voi
   }
 }
 
-function isIsoDateTime(value: unknown): value is string {
+/**
+ * Structural (deep) equality for opaque, domain-blind JSON values.
+ *
+ * Transitions are opaque to the core: it may compare them for identity but
+ * MUST NOT interpret their fields. `JSON.stringify` is the wrong tool for
+ * that comparison, because JSON object member order is serialization detail
+ * rather than semantic identity — `{a:1,b:2}` and `{b:2,a:1}` denote the
+ * same transition but serialize differently.
+ *
+ * Arrays stay order-sensitive, since order is semantic in a JSON array.
+ * Object key order is not. No field name is given meaning here.
+ *
+ * CONTRACT: this is defined over JSON values — null, boolean, number,
+ * string, array, and plain object. Protocol values reach the core already
+ * parsed from JSON, so non-JSON JavaScript values do not arise on the wire.
+ *
+ * Unlike `canonicalJson`, this returns a verdict rather than a key, so a
+ * non-JSON value cannot silently ALIAS another value; the worst it can do
+ * is answer a question that was already outside the contract. It therefore
+ * answers rather than throwing, with these documented behaviors:
+ *
+ *  - `NaN` is unequal to itself, matching JSON's lack of NaN;
+ *  - `-0` and `0` are equal, since JSON has no signed zero;
+ *  - `undefined` is a distinct value, and a present key holding `undefined`
+ *    differs from an absent key;
+ *  - exotic objects (Date, Map, class instances) are compared by their own
+ *    enumerable keys, NOT by JavaScript value semantics — two different
+ *    Dates compare equal because both expose no own keys;
+ *  - a cyclic input is rejected with MseViolation rather than overflowing
+ *    the stack.
+ *
+ * Callers MUST NOT rely on this helper to compare arbitrary JavaScript
+ * objects. Use `canonicalJson`, which fails closed, when a value will
+ * become an identity or map key.
+ */
+export function deepJsonEqual(a: unknown, b: unknown): boolean {
+  return deepJsonEqualInner(a, b, new Set<object>(), new Set<object>());
+}
+
+function deepJsonEqualInner(
+  a: unknown,
+  b: unknown,
+  seenLeft: Set<object>,
+  seenRight: Set<object>
+): boolean {
+  if (a === b) return true;
+  // Primitive/kind mismatch is decisive. Note typeof null === "object", so
+  // the explicit null check below runs before object traversal.
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null) return a === b;
+  if (typeof a !== "object") return false;
+
+  const leftObject = a as object;
+  const rightObject = b as object;
+  if (seenLeft.has(leftObject) || seenRight.has(rightObject)) {
+    throw new MseViolation("Cyclic value cannot be compared; protocol values must be JSON.");
+  }
+  seenLeft.add(leftObject);
+  seenRight.add(rightObject);
+  try {
+    const aIsArray = Array.isArray(a);
+    if (aIsArray !== Array.isArray(b)) return false;
+    if (aIsArray) {
+      const left = a as unknown[];
+      const right = b as unknown[];
+      if (left.length !== right.length) return false;
+      return left.every((item, index) =>
+        deepJsonEqualInner(item, right[index], seenLeft, seenRight)
+      );
+    }
+
+    const left = a as Record<string, unknown>;
+    const right = b as Record<string, unknown>;
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every(
+      key => Object.prototype.hasOwnProperty.call(right, key) &&
+        deepJsonEqualInner(left[key], right[key], seenLeft, seenRight)
+    );
+  } finally {
+    seenLeft.delete(leftObject);
+    seenRight.delete(rightObject);
+  }
+}
+
+/**
+ * Canonical JSON serialization for an opaque, domain-blind value.
+ *
+ * Recursively sorts OBJECT keys and preserves ARRAY order, then serializes.
+ * This makes serialization usable as a deterministic identity/sort key for
+ * values whose object member order is not semantic, which raw
+ * `JSON.stringify` cannot do.
+ *
+ * IMPORTANT: this canonicalizes a single opaque value. It does NOT reorder
+ * protocol arrays whose semantics are sets (coverage, satisfactions,
+ * requiredParticipants, dependsOn). Those must be normalized separately, by
+ * membership, because sorting them here would conflate "unordered
+ * collection" with "ordered JSON array".
+ */
+export function canonicalJson(value: unknown): string {
+  return canonicalJsonInner(value, new Set<object>());
+}
+
+function canonicalJsonInner(value: unknown, seen: Set<object>): string {
+  if (value === null) return "null";
+
+  switch (typeof value) {
+    case "boolean":
+    case "string":
+      return JSON.stringify(value);
+    case "number":
+      // Fail closed rather than let NaN/Infinity silently become "null",
+      // which would make them collide with each other and with real null.
+      if (!Number.isFinite(value)) {
+        throw new MseViolation(
+          `Non-JSON numeric value ${String(value)} cannot be canonicalized; ` +
+            `protocol values must be JSON.`
+        );
+      }
+      // Normalize -0 to 0: JSON has no signed zero.
+      return JSON.stringify(value === 0 ? 0 : value);
+    case "object":
+      break;
+    default:
+      // undefined, function, symbol, bigint. Each would otherwise serialize
+      // to "null" or throw deep inside a traversal.
+      throw new MseViolation(
+        `Non-JSON value of type "${typeof value}" cannot be canonicalized; ` +
+          `protocol values must be JSON.`
+      );
+  }
+
+  const object = value as object;
+  if (seen.has(object)) {
+    throw new MseViolation("Cyclic value cannot be canonicalized; protocol values must be JSON.");
+  }
+  seen.add(object);
+  try {
+    if (Array.isArray(object)) {
+      return `[${object.map(item => canonicalJsonInner(item, seen)).join(",")}]`;
+    }
+    // Reject exotic objects (Date, Map, Set, class instances). Their own
+    // enumerable keys are usually empty, so they would all canonicalize to
+    // "{}" and alias one another — and, as a snapshot-map key, alias an
+    // unrelated empty JSON object.
+    const prototype = Object.getPrototypeOf(object);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new MseViolation(
+        `Non-plain object (${object.constructor?.name ?? "unknown"}) cannot be ` +
+          `canonicalized; protocol values must be JSON.`
+      );
+    }
+    const record = object as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    return `{${keys
+      .map(key => `${JSON.stringify(key)}:${canonicalJsonInner(record[key], seen)}`)
+      .join(",")}}`;
+  } finally {
+    seen.delete(object);
+  }
+}
+
+/**
+ * The ISO 8601 date-time contract this specification enforces for wire
+ * timestamps (`evaluatedAt`, `finalizedAt`, `validUntil`, `settledAt`).
+ *
+ * Exported so a binding can qualify its own candidate timestamps against
+ * the SAME contract core will apply. A binding that instead used bare
+ * `Date.parse` would accept strings core rejects — a date-only
+ * `2026-09-18` parses in JavaScript but is not a date-time — and would
+ * then emit evidence that fails core validation.
+ *
+ * Note this accepts `2026-02-30T00:00:00Z`, which JavaScript rolls over to
+ * March 2. That is the existing contract; the point of exporting is that
+ * binding and core agree, not that either is stricter.
+ */
+export function isIsoDateTime(value: unknown): value is string {
   return typeof value === "string" &&
     /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) &&
     !Number.isNaN(Date.parse(value));
@@ -448,7 +625,12 @@ export function assertAdmissionCoverageWellFormed(
       // lets a reader see an omission that satisfaction evidence alone hides
       // (UCP #799): a PASSED citing one of two required participants is
       // otherwise indistinguishable from a complete pass.
-      const requiredParticipantKeys = new Set<string>();
+      //
+      // A required participant is (unitLocator, transition), not a locator
+      // alone, so the map retains the declared transition. Duplicate
+      // detection stays locator-keyed: one relation MUST NOT state two
+      // required transitions for the same binding-scoped unit.
+      const requiredParticipants = new Map<string, { locator: UnitLocator; transition: unknown }>();
       if (entry.requiredParticipants !== undefined) {
         if (!Array.isArray(entry.requiredParticipants) || entry.requiredParticipants.length === 0) {
           throw new MseViolation(
@@ -475,13 +657,16 @@ export function assertAdmissionCoverageWellFormed(
             );
           }
           const participantKey = unitLocatorKey(participant.unitLocator);
-          if (requiredParticipantKeys.has(participantKey)) {
+          if (requiredParticipants.has(participantKey)) {
             throw new MseViolation(
               `Relation "${entry.relationId}" repeats required participant ` +
                 `${JSON.stringify(participant.unitLocator)}.`
             );
           }
-          requiredParticipantKeys.add(participantKey);
+          requiredParticipants.set(participantKey, {
+            locator: participant.unitLocator,
+            transition: participant.transition,
+          });
         }
       } else if (relation.passEvidence === "REQUIRED") {
         throw new MseViolation(
@@ -490,40 +675,17 @@ export function assertAdmissionCoverageWellFormed(
         );
       }
 
-      // Independent grounding of the stated set.
-      //
-      // Checking `satisfactions` against a producer-supplied
-      // `requiredParticipants` is tautological on its own: a producer that
-      // omits a participant from BOTH arrays still validates. Core therefore
-      // independently derives what it can and treats it as a LOWER BOUND.
-      //
-      // For REQUIRES_COINCLUSION, every quoted unit inside the relation's
-      // declared scope that is not itself a trigger is a participant core can
-      // see without any domain knowledge: the relation says those transitions
-      // are admissible only together. Such a unit MUST appear in the stated
-      // required set.
-      //
-      // This is deliberately a lower bound, not equality. The true required
-      // set may also contain units absent from the quote — satisfied by prior
-      // final history — which core cannot enumerate, because only the binding
-      // knows which scoped units exist and which already reached the state
-      // the gate wants. Binding trace conformance owns that remainder; see
-      // /spec/normative-spec.md §3.2.
-      if (requiredParticipantKeys.size > 0) {
-        const triggers = new Set(relation.triggerUnitRefs);
-        for (const unit of quote.units) {
-          if (unit.unitLocator.scopeRef !== relation.scopeRef) continue;
-          if (triggers.has(unit.unitRef)) continue;
-          if (!requiredParticipantKeys.has(unitLocatorKey(unit.unitLocator))) {
-            throw new MseViolation(
-              `PASSED coverage for relation "${entry.relationId}" omits quoted unit ` +
-                `${JSON.stringify(unit.unitLocator)} from its required participant set, ` +
-                `although that unit is co-included in the relation's declared scope; ` +
-                `the stated set MUST contain every core-visible required participant.`
-            );
-          }
-        }
-      }
+      // NOTE: core does NOT infer relation participation from shared scope.
+      // `scopeRef` says where locators are RESOLVED; it does not mean every
+      // transition inside that scope participates in every relation. A quote
+      // may legitimately carry an unrelated same-scope transition (e.g. a
+      // cancel on one unit alongside a redeem gate on another), and such a
+      // unit is not a participant in that relation. The current
+      // AdmissionRelation declaration carries no participant basis, so core
+      // cannot derive the required set independently. Core checks exact
+      // internal correspondence between requiredParticipants and evidence;
+      // binding trace conformance MUST substantiate that the stated set is
+      // semantically complete. See /spec/normative-spec.md §3.2.
       const seenSatisfactionUnits = new Set<string>();
       if (entry.satisfactions !== undefined) {
         if (!Array.isArray(entry.satisfactions) || entry.satisfactions.length === 0) {
@@ -545,7 +707,7 @@ export function assertAdmissionCoverageWellFormed(
             if (!unit || unit.unitLocator.scopeRef !== relation.scopeRef) {
               throw new MseViolation("Current-request satisfaction references an unrelated unit.");
             }
-            if (JSON.stringify(unit.transition) !== JSON.stringify(satisfaction.transition)) {
+            if (!deepJsonEqual(unit.transition, satisfaction.transition)) {
               throw new MseViolation("Current-request satisfaction transition contradicts its quoted unit.");
             }
             participantKey = unitLocatorKey(unit.unitLocator);
@@ -582,6 +744,23 @@ export function assertAdmissionCoverageWellFormed(
                   `prior-final evidence MUST satisfy finalizedAt <= evaluatedAt.`
               );
             }
+            // NOTE: core does NOT reject a prior-final record merely
+            // because the current quote carries the same locator, or even
+            // the same locator AND the same opaque transition value.
+            //
+            // `transitionRef` is what identifies a historical OCCURRENCE;
+            // `transition` is an opaque operation value the protocol never
+            // declares unique or non-repeatable per unit. A unit that can
+            // be renewed monthly legitimately has a final RENEW in August
+            // and a requested RENEW now. Rejecting that pair would refuse a
+            // truthful report, and would buy nothing against a forger, who
+            // can simply cite a different transition value instead.
+            //
+            // Whether a cited historical occurrence is real, and whether a
+            // current transition on that unit invalidates it, are binding
+            // facts. Core holds the quote, not the unit's history, so it
+            // cannot decide either. Binding trace conformance authenticates
+            // the occurrence; see /spec/normative-spec.md §3.2.
             participantKey = unitLocatorKey(satisfaction.unitLocator);
           } else {
             throw new MseViolation("Unknown admission satisfaction source.");
@@ -589,11 +768,26 @@ export function assertAdmissionCoverageWellFormed(
           if (seenSatisfactionUnits.has(participantKey)) {
             throw new MseViolation("Duplicate satisfaction evidence for one participating unit.");
           }
-          if (requiredParticipantKeys.size > 0 && !requiredParticipantKeys.has(participantKey)) {
-            throw new MseViolation(
-              `Satisfaction evidence for relation "${entry.relationId}" cites a participant ` +
-                `outside the required participant set this evaluation stated.`
-            );
+          if (requiredParticipants.size > 0) {
+            const required = requiredParticipants.get(participantKey);
+            if (!required) {
+              throw new MseViolation(
+                `Satisfaction evidence for relation "${entry.relationId}" cites a participant ` +
+                  `outside the required participant set this evaluation stated.`
+              );
+            }
+            // A required participant is (locator, transition). Evidence for
+            // the right unit but the wrong transition does NOT cover it: a
+            // CANCEL satisfaction must never discharge a required REDEEM,
+            // even though the locator matches.
+            if (!deepJsonEqual(required.transition, satisfaction.transition)) {
+              throw new MseViolation(
+                `Satisfaction evidence for relation "${entry.relationId}" cites participant ` +
+                  `${JSON.stringify(required.locator)} with a transition that differs from the ` +
+                  `transition that participant was required to contribute; evidence MUST match ` +
+                  `the required participant by unit AND transition.`
+              );
+            }
           }
           seenSatisfactionUnits.add(participantKey);
         }
@@ -601,12 +795,14 @@ export function assertAdmissionCoverageWellFormed(
       // Evidence must cover the stated required set EXACTLY. A subset is the
       // omission Weston identified on UCP #799: PASSED citing one of two
       // required participants must not validate.
-      if (requiredParticipantKeys.size > 0) {
-        const uncovered = [...requiredParticipantKeys].filter(key => !seenSatisfactionUnits.has(key));
+      if (requiredParticipants.size > 0) {
+        const uncovered = [...requiredParticipants.keys()].filter(
+          key => !seenSatisfactionUnits.has(key)
+        );
         if (uncovered.length > 0) {
           throw new MseViolation(
             `PASSED coverage for relation "${entry.relationId}" cites satisfaction for ` +
-              `${seenSatisfactionUnits.size} of ${requiredParticipantKeys.size} required ` +
+              `${seenSatisfactionUnits.size} of ${requiredParticipants.size} required ` +
               `participants; evidence MUST cover the required participant set exactly.`
           );
         }
@@ -772,7 +968,22 @@ export function assertAdmissionRefusalWellFormed(
  * - CURRENT_REQUEST + APPLIED        -> REALIZED
  * - CURRENT_REQUEST + REFUSED        -> NOT_REALIZED
  * - CURRENT_REQUEST + INDETERMINATE  -> INDETERMINATE
- * - PRIOR_FINAL_TRANSITION           -> REALIZED (already final by §3.2)
+ * - PRIOR_FINAL_TRANSITION           -> REALIZED (see the boundary below)
+ *
+ * REALIZED for a prior-final record is CONDITIONAL on a binding-owned
+ * claim, and core does not authenticate it. The split is:
+ *
+ *  - core validates STRUCTURE: source shape, participant scope, the
+ *    transition's correspondence to the asserted required participant,
+ *    timestamp format, and finalizedAt <= evaluatedAt;
+ *  - the BINDING authenticates SEMANTICS: that the cited transitionRef
+ *    resolves to a real historical occurrence, and that the occurrence
+ *    satisfies this relation.
+ *
+ * Once that binding-owned claim is conformant, the realization is REALIZED
+ * because the cited occurrence was already final before this request. Core
+ * accepting a prior-final record is therefore NOT by itself evidence that
+ * the history happened.
  *
  * It does NOT change admission-time truth: `PASSED` still means the required
  * transition was present when admission was evaluated, and is not rewritten.
@@ -825,7 +1036,10 @@ export function deriveSatisfactionRealization(
   return {
     quoteId: report.quoteId,
     entries,
-    allRealized: entries.every(entry => entry.realization === "REALIZED"),
+    // Non-vacuous: zero entries is NOT "all realized". An empty set would
+    // otherwise report true for a response that evidenced nothing, which is
+    // the opposite of the fail-closed reading §3.2a requires.
+    allRealized: entries.length > 0 && entries.every(entry => entry.realization === "REALIZED"),
   };
 }
 
@@ -841,14 +1055,16 @@ export function assertSatisfactionRealizationConsistent(
   claimed: SatisfactionRealizationReport
 ): void {
   const derived = deriveSatisfactionRealization(report, result);
-  const normalize = (value: SatisfactionRealizationReport) => ({
+  // `entries` is a SET: its array position carries no meaning, so it is
+  // normalized by membership. Each entry is reduced through canonicalJson so
+  // that object member order inside a locator (or any opaque value it
+  // carries) is not mistaken for a difference.
+  const normalize = (value: SatisfactionRealizationReport) => canonicalJson({
     quoteId: value.quoteId,
     allRealized: value.allRealized,
-    entries: [...value.entries]
-      .map(entry => JSON.stringify(entry))
-      .sort(),
+    entries: value.entries.map(canonicalJson).sort(),
   });
-  if (JSON.stringify(normalize(claimed)) !== JSON.stringify(normalize(derived))) {
+  if (normalize(claimed) !== normalize(derived)) {
     throw new MseViolation(
       "Claimed satisfaction realization disagrees with the derivation from this response's " +
         "coverage and unitResults."
@@ -1209,7 +1425,11 @@ export function assertExactGuaranteesHonored(
       );
     }
 
-    if (JSON.stringify(committed.value) !== JSON.stringify(quoted.value)) {
+    // Structural, not serialization-wise: an effect value is opaque domain
+    // JSON, so reordering its object members is not a change. Accusing a
+    // provider of an EXACT-guarantee violation for key order would be a
+    // false positive.
+    if (!deepJsonEqual(committed.value, quoted.value)) {
       throw new MseViolation(
         `EXACT-guaranteed effect "${quoted.effectId}" (unit "${unit.unitRef}") changed value ` +
           `between quote and commit (quoted=${JSON.stringify(quoted.value)}, ` +

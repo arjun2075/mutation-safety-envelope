@@ -77,12 +77,50 @@ unit is still not required to wait for its satisfier to be applied.
 
 Each `PASSED` entry for these gates also states the complete participant set
 the evaluation required, so evidence citing only one of two required goods
-cancellations is rejected rather than silently accepted. Core independently
-requires every co-included quoted unit to appear in that set, so a producer
-cannot hide an omission by shrinking both the evidence and the stated set.
-Participants satisfied by prior history are not quoted units, so this binding's
-trace conformance re-derives the required set from real state and rejects a
-forged one.
+cancellations is rejected rather than silently accepted. Evidence must match
+a required participant by unit **and** transition, so a cancellation never
+discharges a required redemption on the same unit.
+
+Core does **not** infer which units participate. These gates are a good
+illustration of why: an order-scoped proposal may redeem `goods_1`, cancel
+`goods_2`, and redeem `delivery` in one request, and only `delivery`
+participates in the goods-redeem relation even though all three share the
+order scope. Semantic completeness of the stated set is therefore this
+binding's obligation: its trace conformance re-derives the required set from
+real state and rejects a forged one that core, seeing only an internally
+consistent report, cannot disprove.
+
+## Binding contracts this example defines
+
+These are retail/reference-binding decisions, not generic MSE requirements.
+The core protocol permits a range of conformant behavior here; this binding
+picks one canonical representation so trace conformance can check against a
+defined answer rather than rejecting another truthful witness by accident.
+
+- **Evidence-source precedence.** When a required participant is satisfied
+  both by a valid prior final occurrence and by the same transition present
+  again in the current request, this binding cites the **prior final**
+  evidence. A redundant current attempt can still end `REFUSED` or
+  `INDETERMINATE`, and reporting it would make a relation that was already
+  satisfied historically read as unrealized. Current-request evidence is
+  used only when no semantically sufficient prior occurrence exists.
+- **`transitionRef` identity.** Within one binding-scoped unit, a
+  `transitionRef` identifies exactly one historical occurrence. A history
+  reusing a ref fails closed, because an ambiguous citation cannot be
+  authenticated. Scope is `(unitLocator, transitionRef)`; the core protocol
+  does not declare `transitionRef` globally scoped, so the same ref may
+  appear on unrelated units.
+- **Historical qualification.** A candidate must be `FINAL`, match the
+  required transition, carry a `finalizedAt` satisfying the same ISO
+  date-time contract core enforces, and have finalized at or before the
+  evaluation instant. Qualifying on the shared validator rather than bare
+  `Date.parse` matters: a date-only string parses in JavaScript but is not
+  a date-time, and selecting it would emit evidence core rejects.
+- **Canonical selection.** Among several qualifying occurrences, this
+  binding cites the greatest finalization instant, with ordinal
+  `transitionRef` as tiebreak. Trace conformance enforces that rule, so a
+  truthful but non-canonical citation is rejected as non-canonical, not as
+  untruthful.
 
 ## Files
 

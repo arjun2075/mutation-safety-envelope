@@ -118,7 +118,24 @@ and actual runner counts.
 | Prior-final evidence realizes rather than abstaining | Mixed relation realized from both sources under one verdict; realized historical half does not mask a refused current-request half |
 | Non-atomicity preserved under the new correlation | Explicit case asserting `goods_1` APPLIED while its declared satisfier is REFUSED |
 | Satisfaction evidence covers the required set exactly | Two-participant complete pass; subset-evidence rejection; out-of-set and malformed participant negatives |
-| Required set is independently grounded, not tautological | Both-arrays-shrunk forgery rejected by core; prior-history participant absent from the quote still accepted; forged prior-history participant rejected by retail trace conformance |
+| Evidence corresponds to the required set by unit AND transition | Wrong-transition evidence rejected for both CURRENT_REQUEST and PRIOR_FINAL_TRANSITION; duplicate locator still rejected; reordered transition members still compare equal |
+| Semantic completeness of the required set is binding-owned | Core does NOT derive participation from shared scope: an unrelated same-scope transition passes admission, and the COMPLETE-witness amendment commits. A both-arrays-consistent forgery is accepted by core and rejected by retail trace conformance, which is the documented division under the current relation shape |
+| Evidence-source precedence is defined and canonical | Valid prior-final preferred over a redundant current attempt; realization stays REALIZED when that attempt is APPLIED, REFUSED, or INDETERMINATE; current-request used when no sufficient prior exists; the refused unit is still reported in unitResults |
+| transitionRef identifies one occurrence per unit | Duplicate ref rejected for different transition, different finalizedAt, exact duplicate, non-final records, and units the evaluation does not cite; the same ref on a different unit is allowed |
+| Historical qualification matches core's ISO contract | Shared `isIsoDateTime`; date-only, malformed-offset, and impossible values rejected before selection rather than emitted and then failing core |
+| Canonical selection is enforced deliberately | Greatest instant, ordinal transitionRef tiebreak, stable across array order; a truthful but non-canonical citation is rejected as non-canonical |
+| Trace resolves transitionRef to the exact occurrence | Refs belonging to another unit, refs resolving to nothing, and right-ref/wrong-instant all rejected |
+| Prior-final evidence may coexist with current activity (Model B) | Historical A + current B accepted; historical A + current A accepted; current evidence still correlated to its own unitResult; fabricated history rejected by binding trace, including the laundering case core now accepts |
+| Retail prior-final selection respects evaluation time | FINAL before/at `now` usable; after `now` not usable and takes the normal failure path; a future-dated earlier element cannot hide a valid later one; selection independent of history array order |
+| Equivalent timestamp spellings accepted | `finalizedAt` compared by parsed instant in both core and retail trace; a genuinely different instant still differs |
+| Canonical ordering is locale-independent | Ordinal (code-unit) ordering, with a non-ASCII regression; `localeCompare` removed from normalization |
+| JSON utilities fail closed | `canonicalJson` rejects undefined/NaN/Infinity/Date/Map/Set/function/bigint/cyclic rather than aliasing them to "null" or "{}"; `deepJsonEqual` documents its verdicts and rejects cycles |
+| Derived aggregate is non-vacuous | Zero realization entries report allRealized false |
+| Every COMMIT_RESULT path retains state for realization | Quote expiry persists unitResults; snapshot mismatch unchanged; both answer satisfactionRealization afterwards; reconciliation moves an INDETERMINATE satisfier to REALIZED or NOT_REALIZED |
+| Opaque values compare structurally everywhere | `deepJsonEqual` for equality and `canonicalJson` for identity/sort keys, across core validation, realization consistency, the retail trace oracle, EXACT-guarantee effect comparison, and ReferenceProvider snapshot keying/comparison |
+| Set-like protocol arrays compare by membership | Reordered coverage, satisfactions, requiredParticipants, and realization entries all accepted; reordering combined with transition-key reordering also accepted; a genuine content change still rejected |
+| Realization aggregate scope is evidence, not gates | Evidence-free PASSED relation contributes no entry; mixed evidence-bearing/evidence-free report aggregates over present entries only |
+| Trace oracle resists set-normalization attacks | Duplicated satisfaction, duplicated participant, extra undeclared coverage entry, and forged `stateRef` all rejected; reordered `stateRef` members accepted |
 | Prior-final time compared as instants, not strings | Same-instant/different-offset evidence accepted; genuinely later instant rejected |
 | Prior-final evidence is temporally consistent | `finalizedAt > evaluatedAt` rejection; equality and earlier-than acceptance; format check retained |
 
@@ -128,7 +145,7 @@ All commands below exited 0 after code/test changes:
 
 | Command | Actual result |
 | --- | --- |
-| `npm test` | **228 passed, 4 files**: core 78, retail admission 61, schema 53, request reporting 36 |
+| `npm test` | **307 passed, 4 files**: core 78, retail admission 140, schema 53, request reporting 36 |
 | `npm run build` | TypeScript compilation passed |
 | `npm run validate-schema` | AJV strict draft-2020-12 compilation passed |
 | `npm run test:baseline` | **2 passed** against recorded v0.3.0 core; 3 cycles/4 quotes reproduced |
@@ -140,9 +157,9 @@ package scripts are identical. A normal supported Node/npm installation can
 run the commands directly. `npm run test:baseline` requires the recorded base
 Git object and installed development dependencies.
 
-The two baseline characterization cases are **not included** in the 228-test
+The two baseline characterization cases are **not included** in the 307-test
 `npm test` result. They run separately because they compile against the
-recorded v0.3.0 core contract. Across the two test invocations, exactly **230
+recorded v0.3.0 core contract. Across the two test invocations, exactly **309
 test cases ran and passed**.
 
 Remaining limitations: provider traces can lie, observational hooks can hide

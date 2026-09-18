@@ -401,7 +401,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["unitLocator", "transition"],
-      "description": "One participant whose transition a relation required at this evaluation pass. Carried on the coverage entry, not the quote declaration, because the satisfying set is live state resolved at admission. Naming the complete set is what lets validation reject a PASSED that cites only a subset.",
+      "description": "One participant whose transition a relation required at this evaluation pass, as the pair (unitLocator, transition). Carried on the coverage entry, not the quote declaration, because the satisfying set is live state resolved at admission. Naming the complete set lets validation reject a PASSED that cites only a subset, or that substitutes a different transition on the right unit. Core checks internal correspondence only; it does not derive participation from scopeRef, and semantic completeness of the set is a binding trace-conformance obligation.",
       "properties": {
         "unitLocator": { "$ref": "#/$defs/UnitLocator" },
         "transition": {
@@ -435,7 +435,7 @@
               "minItems": 1,
               "uniqueItems": true,
               "items": { "$ref": "#/$defs/AdmissionRequiredParticipant" },
-              "description": "The complete participant set this evaluation required. When present, satisfactions MUST cover it exactly: no omitted participant and none outside it. Required alongside evidence when the relation declares passEvidence REQUIRED. Exact correspondence needs the quote and both arrays together, so runtime validation enforces it; JSON Schema alone cannot."
+              "description": "The complete participant set this evaluation required. When present, satisfactions MUST cover it exactly by unit AND transition: no omitted participant, none outside it, and no substituted transition. Required alongside evidence when the relation declares passEvidence REQUIRED. Exact correspondence needs the quote and both arrays together, so runtime validation enforces it; JSON Schema alone cannot. Whether the stated set is semantically complete is a binding trace-conformance obligation, not something core can derive."
             }
           }
         },

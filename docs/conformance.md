@@ -47,13 +47,24 @@ A provider claiming MSE v0.4.0-dev.0 conformance MUST:
    inventing a failure witness. A relation declaring `passEvidence: REQUIRED`
    MUST have non-empty PASSED satisfaction records and MUST state the complete
    `requiredParticipants` set that evidence covers; evidence MUST cover that
-   set exactly, so a PASSED citing only a subset is non-conformant. The stated
-   set MUST contain every participant core can derive independently — for
-   `REQUIRES_COINCLUSION`, every co-included non-trigger quoted unit in the
-   relation's scope — so the check cannot be satisfied by omitting a
-   participant from both arrays. Binding trace conformance MUST validate the
-   remainder core cannot derive, including participants satisfied by prior
-   history.
+   set exactly, so a PASSED citing only a subset is non-conformant. A
+   required participant is (unitLocator, transition): evidence MUST match
+   both, so a satisfaction for the right unit carrying a different transition
+   does not cover it. Core MUST NOT infer participation from shared
+   `scopeRef`, which says only where locators resolve; an unrelated
+   same-scope transition is not a participant. Because the relation
+   declaration carries no participant basis, **binding trace conformance MUST
+   validate that the stated set is semantically complete**; core establishes
+   internal correspondence only.
+   A `PRIOR_FINAL_TRANSITION` record MAY cite a locator the current quote
+   also carries, including with the same opaque transition value:
+   `transitionRef` identifies the historical occurrence, and the protocol
+   never declares transitions non-repeatable per unit. Core therefore cannot
+   detect a current-request satisfier relabelled as history. Authenticating
+   that a cited occurrence really happened, and that it satisfies the
+   relation, is entirely a binding obligation. A binding MUST resolve the
+   cited `transitionRef` to exactly one historical occurrence within that
+   unit and verify its transition and finalization instant.
    Current-request records must correlate to quoted units; prior records must
    cite a stable transition reference and an ISO finalization time satisfying
    `finalizedAt <= evaluatedAt`. Only binding-confirmed final history
