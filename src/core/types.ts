@@ -1,5 +1,5 @@
 /**
- * Mutation Safety Envelope (MSE) — core types, v0.3.0.
+ * Mutation Safety Envelope (MSE) — core types, v0.4.0-dev.0.
  *
  * This file is a TypeScript mirror of /schema/mse-core.schema.json.
  * The JSON Schema is normative; this file exists for ergonomic use in
@@ -95,6 +95,38 @@ export interface AdmissionRelation {
   triggerUnitRefs: string[];
   /** Binding-defined scope in which any required UnitLocator is resolved. */
   scopeRef: string;
+  /**
+   * Declares that a PASSED result for this relation must identify the
+   * participating transitions that satisfied it. The core validates shape
+   * and correlation only; the binding owns their meaning and truth.
+   */
+  passEvidence?: "REQUIRED";
+}
+
+/**
+ * The complete participant set a relation required at one evaluation pass,
+ * carried on the coverage entry rather than the quote declaration because
+ * the satisfying set is live state (UCP #799): it is resolved at admission,
+ * not at quote time. Naming it makes an omission visible to a reader, who
+ * otherwise cannot tell a complete pass from one citing a subset.
+ *
+ * A participant is the pair (unitLocator, transition). Evidence must match
+ * both, so a satisfaction for one transition never discharges a requirement
+ * for another on the same unit.
+ *
+ * Core validates internal correspondence only. It does NOT derive which
+ * units participate: `scopeRef` says where locators resolve, not which
+ * transitions take part in a relation, and AdmissionRelation carries no
+ * participant basis. Semantic completeness of this set is a binding
+ * trace-conformance obligation — see /spec/normative-spec.md §3.2.
+ *
+ * This is evaluation evidence, not a lock and not a new lifecycle state.
+ */
+export interface AdmissionRequiredParticipant {
+  /** Binding-scoped identity of a unit whose transition the relation required. */
+  unitLocator: UnitLocator;
+  /** Opaque binding-defined transition that participant had to contribute. */
+  transition: unknown;
 }
 
 /** A non-mutating representation of the predicted consequences of a proposal. */
@@ -186,16 +218,189 @@ export interface AdmissionFailure {
   witness: AdmissionWitness;
 }
 
-/** A known pre-dispatch refusal. No commercial mutation was dispatched. */
-export interface AdmissionRefusal {
+/** One transition that the binding says satisfied a relation in this pass. */
+export type AdmissionSatisfaction =
+  | {
+      source: "CURRENT_REQUEST";
+      /** Quote-local reference to the participating unit. */
+      unitRef: string;
+      /** Opaque transition, repeated so the evidence is reader-facing. */
+      transition: unknown;
+      unitLocator?: never;
+      transitionRef?: never;
+      finalizedAt?: never;
+    }
+  | {
+      source: "PRIOR_FINAL_TRANSITION";
+      /** Stable binding-scoped identity for a unit outside this quote. */
+      unitLocator: UnitLocator;
+      /** Opaque binding-defined transition proven final by the binding. */
+      transition: unknown;
+      /** Stable correlation for the prior transition. */
+      transitionRef: string;
+      /** ISO 8601 time at which the prior transition became final. */
+      finalizedAt: string;
+      unitRef?: never;
+    };
+
+/** Evaluation coverage is separate from the repair disposition of a failure. */
+export type AdmissionCoverage =
+  | {
+      relationId: string;
+      status: "PASSED";
+      satisfactions?: AdmissionSatisfaction[];
+      /**
+       * The complete participant set this evaluation required. When present,
+       * satisfaction evidence MUST cover it exactly — no omission, no
+       * out-of-scope addition. Required alongside evidence for a relation
+       * declaring `passEvidence: REQUIRED`.
+       */
+      requiredParticipants?: AdmissionRequiredParticipant[];
+      dependsOn?: never;
+    }
+  | {
+      relationId: string;
+      status: "FAILED";
+      satisfactions?: never;
+      dependsOn?: never;
+    }
+  | { relationId: string; status: "DEFERRED"; dependsOn: string[] };
+
+/** Reader-facing result of one admission evaluation pass. */
+export interface AdmissionReport {
   quoteId: string;
   proposalId: string;
   /** ISO 8601 time at which the binding evaluated current dependency state. */
   evaluatedAt: string;
   /** Optional opaque binding state/version evidence. This is not a lock. */
   stateRef?: unknown;
-  /** One or more failed relations. A witness applies only to its own relation. */
+  /** Failed relations. A witness applies only to its own relation. */
   failures: AdmissionFailure[];
+  /** Exactly one entry per quote-declared relation for this evaluation pass. */
+  coverage: AdmissionCoverage[];
+}
+
+/**
+ * Whether a satisfaction record that admission accepted actually took effect
+ * once the request executed. This is NOT a lifecycle state and NOT a fourth
+ * coverage status: admission-time `PASSED` is unchanged and remains the
+ * answer to "was the required transition present when admission ran".
+ * Realization answers the separate question "did that satisfaction take
+ * effect", which only a COMMIT_RESULT can answer.
+ *
+ * - `REALIZED`: the satisfying unit's UnitResult is APPLIED.
+ * - `NOT_REALIZED`: the satisfying unit's UnitResult is REFUSED, so the
+ *   cited transition never took effect. Admission was still truthful about
+ *   what the request contained.
+ * - `INDETERMINATE`: the satisfying unit's UnitResult is INDETERMINATE, so
+ *   whether the satisfaction took effect is unknown and MUST NOT be assumed
+ *   either way.
+ * A PRIOR_FINAL_TRANSITION record is also `REALIZED`, but conditionally on
+ * a claim core does not verify. Core checks the record's structure, scope,
+ * transition correspondence, timestamp format, and temporal ordering; the
+ * BINDING authenticates that the cited transitionRef resolves to a real
+ * historical occurrence and that the occurrence satisfies the relation.
+ * Given a conformant binding, the satisfaction occurred historically rather
+ * than in this request, which is why it realizes. The record's own `source` carries that distinction,
+ * so the realization value does not need to. Reporting it as "not
+ * applicable" would withhold a verdict in the one case where the evidence is
+ * strongest, and would collide with the separate `NOT_APPLICABLE` admission
+ * coverage status this revision deliberately did NOT add.
+ */
+export type SatisfactionRealization =
+  | "REALIZED"
+  | "NOT_REALIZED"
+  | "INDETERMINATE";
+
+/**
+ * One satisfaction record correlated with the execution outcome of its unit.
+ *
+ * IDENTITY: this entry is **not self-describing**. It deliberately does not
+ * carry the satisfaction's `transition`, so it identifies which satisfaction
+ * it describes only in conjunction with its originating `AdmissionReport`.
+ *
+ * Within one report the tuple (`relationId`, `source`, `unitRef` or
+ * `unitLocator`) is unique, because a relation MUST NOT repeat satisfaction
+ * for the same binding-scoped unit (§3.2). That is what keeps the
+ * historical-A-versus-current-B case unambiguous: a prior transition A and a
+ * different current transition B on the same unit necessarily belong to
+ * different relations or different sources, so they never collapse into one
+ * indistinguishable entry. Join on that tuple to recover the transition.
+ *
+ * This report is DERIVED, not a wire object, so no field is added here to
+ * make an entry stand alone. If a consumer genuinely needs standalone
+ * identity, that is a separate proposal for a derived-only addition, not a
+ * silent protocol change.
+ */
+export interface SatisfactionRealizationEntry {
+  relationId: string;
+  source: AdmissionSatisfaction["source"];
+  /** Present for CURRENT_REQUEST records: the quoted unit cited as satisfier. */
+  unitRef?: string;
+  /** Present for PRIOR_FINAL_TRANSITION records. */
+  unitLocator?: UnitLocator;
+  realization: SatisfactionRealization;
+  /**
+   * The correlated UnitResult outcome. Absent for a PRIOR_FINAL_TRANSITION
+   * record, which has no execution outcome in this response because its
+   * satisfaction was already final before the request.
+   */
+  outcome?: UnitOutcome;
+}
+
+/**
+ * A non-authoritative, purely DERIVED correlation of a successful admission
+ * report's satisfaction evidence against the execution outcomes in the same
+ * response. It is derived by validation from data already on the wire
+ * (`coverage[].satisfactions` and `commitResult.unitResults`) and adds no
+ * new wire field to the admission entry, so "admitted because requested"
+ * and "realized after execution" stay distinguishable.
+ *
+ * Like `AggregateHint`, there is exactly one correct derivation (see
+ * /spec/normative-spec.md §3.2a) and a caller MUST NOT read a realization
+ * verdict as an admission result, or vice versa. It creates no ordering or
+ * atomicity requirement: a dependent unit is never required to wait for its
+ * satisfier to become APPLIED.
+ */
+export interface SatisfactionRealizationReport {
+  quoteId: string;
+  entries: SatisfactionRealizationEntry[];
+  /**
+   * True iff there is at least one realization entry AND every entry
+   * REPRESENTED IN THIS REPORT is REALIZED.
+   *
+   * Read the scope precisely. This is a statement about the satisfaction
+   * records that exist, NOT a claim that every admission relation or gate
+   * was realized. A relation that passed without supplying satisfaction
+   * evidence contributes no entry, so it is neither counted nor vouched
+   * for: a report containing one evidence-bearing realized relation and one
+   * evidence-free passed relation yields `true`, and that `true` says
+   * nothing about the second relation.
+   *
+   * Deliberately non-vacuous: an empty entry set reports `false`, because a
+   * response that evidenced nothing has realized nothing and MUST NOT read
+   * as though it had.
+   *
+   * It is also NOT a statement about commit success, and the two can
+   * legitimately disagree. A request admitted purely on prior final
+   * history, whose quote then expires before dispatch, carries
+   * `aggregateHint: "ALL_REFUSED"` and `allRealized: true` in the same
+   * response: nothing committed, yet the historical satisfaction genuinely
+   * occurred. A consumer asking "did this commit succeed" MUST read
+   * `unitResults`, never this field.
+   */
+  allRealized: boolean;
+}
+
+/** A known pre-dispatch refusal. No commercial mutation was dispatched. */
+export interface AdmissionRefusal extends AdmissionReport {
+  /** A refusal necessarily reports at least one failed relation. */
+  failures: [AdmissionFailure, ...AdmissionFailure[]];
+}
+
+/** Admission report carried beside a CommitResult after admission passed. */
+export interface SuccessfulAdmissionReport extends AdmissionReport {
+  failures: [];
 }
 
 /**
@@ -297,12 +502,18 @@ export interface CommitResult {
 }
 
 /**
- * v0.3.0 commit response. Admission refusal remains distinct from per-unit
- * commit outcomes because a known refusal dispatches no commercial mutation.
+ * Admission refusal remains distinct from per-unit commit outcomes because a
+ * known refusal dispatches no commercial mutation. Successful/commit-result
+ * responses carry their admission report beside, never inside, CommitResult.
  */
 export type CommitResponse =
   | { kind: "ADMISSION_REFUSED"; admissionRefusal: AdmissionRefusal }
-  | { kind: "COMMIT_RESULT"; commitResult: CommitResult };
+  | {
+      kind: "COMMIT_RESULT";
+      /** Admission remains distinct from the execution result. */
+      admissionReport: SuccessfulAdmissionReport;
+      commitResult: CommitResult;
+    };
 
 export type EffectFinalityState = "FINAL" | "PENDING" | "FAILED" | "UNKNOWN";
 

@@ -1,5 +1,5 @@
 /**
- * Mutation Safety Envelope (MSE) — reference provider, v0.3.0.
+ * Mutation Safety Envelope (MSE) — reference provider, v0.4.0-dev.0.
  *
  * A minimal, in-memory, domain-blind implementation of the MSE lifecycle.
  * This exists to (a) prove the schema is implementable and (b) give the
@@ -11,14 +11,18 @@
  *
  * This is reference behavior, not the only legal implementation.
  *
- * v0.3.0 change: commit() now returns a discriminated CommitResponse so a
- * known pre-dispatch admission refusal remains separate from the existing
- * per-unit CommitResult. See /docs/v0.3-design-decision.md.
+ * commit() returns a discriminated CommitResponse so a known pre-dispatch
+ * admission refusal remains separate from the existing per-unit CommitResult.
+ * Passing coverage remains reader-visible as a sibling AdmissionReport.
  */
 
 import type {
+  SatisfactionRealizationReport,
   AdmissionFailure,
+  AdmissionCoverage,
+  AdmissionReport,
   AdmissionRefusal,
+  SuccessfulAdmissionReport,
   CommitRequest,
   CommitResponse,
   CommitResult,
@@ -32,11 +36,15 @@ import type {
   Reconciliation,
 } from "./types";
 import {
+  canonicalJson,
+  deepJsonEqual,
   evaluateAcceptanceConstraints,
   isQuoteExpired,
   assertQuoteUnitsWellFormed,
   assertAdmissionRefusalWellFormed,
+  assertAdmissionReportWellFormed,
   computeAggregateHint,
+  deriveSatisfactionRealization,
   MseViolation,
 } from "./validate";
 
@@ -49,14 +57,15 @@ export type Quoter = (
 export interface AdmissionEvaluation {
   /** Optional evidence identifying the state that was evaluated. Not a lock. */
   stateRef?: unknown;
-  /** Empty means the declared relations passed at this evaluation. */
+  /** Empty permits dispatch only when every coverage entry is PASSED. */
   failures: AdmissionFailure[];
+  coverage: AdmissionCoverage[];
 }
 
 /**
  * A synchronous, observational binding hook. It parses opaque transitions and
  * reads current domain state but MUST NOT dispatch a commercial mutation; the
- * core only validates/correlates its returned failures.
+ * core validates coverage and correlates returned failures; truth remains binding-owned.
  */
 export type AdmissionEvaluator = (
   proposal: MutationProposal,
@@ -130,6 +139,8 @@ export class ReferenceProvider {
   private unitResultsByQuoteId = new Map<string, UnitResult[]>();
   /** Pending indeterminate units, keyed by the Reconciliation.correlationId this provider issued. */
   private pendingByCorrelationId = new Map<string, PendingReconciliation>();
+  /** Successful admission reports, retained so realization stays derivable post-commit. */
+  private admissionReportsByQuoteId = new Map<string, SuccessfulAdmissionReport>();
 
   constructor(
     private readonly quoter: Quoter,
@@ -138,9 +149,17 @@ export class ReferenceProvider {
     private readonly admission?: AdmissionEvaluator
   ) {}
 
-  /** Registers (or updates) the current snapshot reference for a target resource. */
+  /**
+   * Registers (or updates) the current snapshot reference for a target
+   * resource.
+   *
+   * The target is keyed by `canonicalJson`, not raw `JSON.stringify`, so a
+   * caller that builds an equivalent target object with its members in a
+   * different order addresses the same entry rather than silently creating
+   * a second one. Snapshot COMPARISON is likewise structural (see commit()).
+   */
   setSnapshot(target: unknown, snapshot: unknown): void {
-    this.snapshotsByTarget.set(JSON.stringify(target), snapshot);
+    this.snapshotsByTarget.set(canonicalJson(target), snapshot);
   }
 
   /** Step 1: Proposal -> Quote; retains proposal context for admission. */
@@ -170,22 +189,50 @@ export class ReferenceProvider {
     const quote = this.quotesById.get(request.quoteId);
 
     if (!quote) {
-      // No quote to enumerate units from; nothing to report per-unit.
-      // A provider cannot invent units it never quoted, so this remains a
-      // single synthetic UnitResult keyed by a placeholder — see
-      // /spec/normative-spec.md §1b note on unknown-quote handling.
-      const unitResults: UnitResult[] = [
-        { unitRef: "unknown", outcome: "REFUSED", refusalReason: "PROVIDER_REJECTED" },
-      ];
-      return {
-        kind: "COMMIT_RESULT",
-        commitResult: {
-          quoteId: request.quoteId,
-          unitResults,
-          aggregateHint: computeAggregateHint(unitResults),
-        },
-      };
+      throw new MseViolation(
+        `Unknown quote "${request.quoteId}" cannot produce a correlated admission report.`
+      );
     }
+
+    const proposal = this.proposalsByQuoteId.get(quote.quoteId);
+    if (!proposal) {
+      throw new MseViolation(`ReferenceProvider lost proposal context for quote "${quote.quoteId}".`);
+    }
+
+    let evaluation: AdmissionEvaluation = { failures: [], coverage: [] };
+    if (quote.admissionRelations.length > 0) {
+      if (!this.admission) {
+        throw new MseViolation("Declared admission relations require an evaluator; no result is known.");
+      }
+      evaluation = this.admission(proposal, quote, now);
+      if (!evaluation || !Array.isArray(evaluation.failures)) {
+        throw new MseViolation(`Admission evaluator returned a malformed evaluation.`);
+      }
+    }
+
+    const admissionReport: AdmissionReport = {
+      quoteId: quote.quoteId,
+      proposalId: proposal.proposalId,
+      evaluatedAt: now.toISOString(),
+      ...(evaluation.stateRef === undefined ? {} : { stateRef: evaluation.stateRef }),
+      failures: evaluation.failures,
+      coverage: evaluation.coverage,
+    };
+    assertAdmissionReportWellFormed(quote, proposal, admissionReport);
+
+    if (evaluation.failures.length > 0) {
+      const admissionRefusal: AdmissionRefusal = {
+        ...admissionReport,
+        failures: evaluation.failures as [AdmissionFailure, ...AdmissionFailure[]],
+      };
+      assertAdmissionRefusalWellFormed(quote, proposal, admissionRefusal);
+      return { kind: "ADMISSION_REFUSED", admissionRefusal };
+    }
+    const successfulAdmissionReport: SuccessfulAdmissionReport = {
+      ...admissionReport,
+      failures: [],
+    };
+    this.admissionReportsByQuoteId.set(quote.quoteId, successfulAdmissionReport);
 
     if (isQuoteExpired(quote, now)) {
       const unitResults: UnitResult[] = quote.units.map((u) => ({
@@ -193,8 +240,15 @@ export class ReferenceProvider {
         outcome: "REFUSED",
         refusalReason: "QUOTE_EXPIRED",
       }));
+      // Persist, exactly as the snapshot-mismatch and normal paths do. This
+      // branch previously returned without recording, so receipt() and
+      // satisfactionRealization() lost the outcome of a real COMMIT_RESULT
+      // and a reader could not tell an expired-refusal from a quote that
+      // never committed.
+      this.unitResultsByQuoteId.set(quote.quoteId, unitResults);
       return {
         kind: "COMMIT_RESULT",
+        admissionReport: successfulAdmissionReport,
         commitResult: {
           quoteId: quote.quoteId,
           unitResults,
@@ -204,8 +258,11 @@ export class ReferenceProvider {
     }
 
     if (quote.commitConsistency === "SNAPSHOT_REQUIRED") {
-      const current = this.snapshotsByTarget.get(JSON.stringify(quote.target));
-      if (JSON.stringify(current) !== JSON.stringify(quote.snapshot)) {
+      const current = this.snapshotsByTarget.get(canonicalJson(quote.target));
+      // Structural comparison: a snapshot is an opaque provider-defined
+      // value, so member order is not drift. Raw serialization here would
+      // report SNAPSHOT_MISMATCH for a semantically identical snapshot.
+      if (!deepJsonEqual(current, quote.snapshot)) {
         const unitResults: UnitResult[] = quote.units.map((u) => ({
           unitRef: u.unitRef,
           outcome: "REFUSED",
@@ -214,6 +271,7 @@ export class ReferenceProvider {
         this.unitResultsByQuoteId.set(quote.quoteId, unitResults);
         return {
           kind: "COMMIT_RESULT",
+          admissionReport: successfulAdmissionReport,
           commitResult: {
             quoteId: quote.quoteId,
             unitResults,
@@ -227,38 +285,6 @@ export class ReferenceProvider {
     const violatedEffectIds = new Set<string>();
     if (violated.length > 0) {
       for (const c of violated) violatedEffectIds.add(c.effectId);
-    }
-
-    const proposal = this.proposalsByQuoteId.get(quote.quoteId);
-    if (!proposal) {
-      throw new MseViolation(`ReferenceProvider lost proposal context for quote "${quote.quoteId}".`);
-    }
-
-    if (quote.admissionRelations.length > 0) {
-      const evaluation: AdmissionEvaluation = this.admission
-        ? this.admission(proposal, quote, now)
-        : {
-            failures: quote.admissionRelations.map((relation) => ({
-              relationId: relation.relationId,
-              witness: { disposition: "UNAVAILABLE" },
-            })),
-          };
-
-      if (!evaluation || !Array.isArray(evaluation.failures)) {
-        throw new MseViolation(`Admission evaluator returned a malformed evaluation.`);
-      }
-
-      if (evaluation.failures.length > 0) {
-        const admissionRefusal: AdmissionRefusal = {
-          quoteId: quote.quoteId,
-          proposalId: proposal.proposalId,
-          evaluatedAt: now.toISOString(),
-          ...(evaluation.stateRef === undefined ? {} : { stateRef: evaluation.stateRef }),
-          failures: evaluation.failures,
-        };
-        assertAdmissionRefusalWellFormed(quote, proposal, admissionRefusal);
-        return { kind: "ADMISSION_REFUSED", admissionRefusal };
-      }
     }
 
     const unitResults: UnitResult[] = quote.units.map((unit) => {
@@ -296,12 +322,37 @@ export class ReferenceProvider {
 
     return {
       kind: "COMMIT_RESULT",
+      admissionReport: successfulAdmissionReport,
       commitResult: {
         quoteId: quote.quoteId,
         unitResults,
         aggregateHint: computeAggregateHint(unitResults),
       },
     };
+  }
+
+  /**
+   * The §3.2a execution-time realization of a committed quote's
+   * current-request satisfaction evidence.
+   *
+   * This exists so the consumer obligation is dischargeable from the
+   * reference implementation itself, rather than only from a validator a
+   * caller might not run: a consumer holding a quoteId can ask what the
+   * admission evidence actually amounted to after execution. Returns
+   * undefined when this provider has no commit result for the quote, in
+   * which case a caller MUST NOT upgrade admission evidence to realized
+   * satisfaction.
+   */
+  satisfactionRealization(quoteId: string): SatisfactionRealizationReport | undefined {
+    const quote = this.quotesById.get(quoteId);
+    const report = this.admissionReportsByQuoteId.get(quoteId);
+    const unitResults = this.unitResultsByQuoteId.get(quoteId);
+    if (!quote || !report || !unitResults) return undefined;
+    return deriveSatisfactionRealization(report, {
+      quoteId,
+      unitResults,
+      aggregateHint: computeAggregateHint(unitResults),
+    });
   }
 
   /**

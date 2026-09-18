@@ -1,6 +1,13 @@
 {
   "commitResponse": {
     "kind": "COMMIT_RESULT",
+    "admissionReport": {
+      "quoteId": "quote_retail_9901_1",
+      "proposalId": "proposal_retail_9901_1",
+      "evaluatedAt": "2026-09-02T17:00:00Z",
+      "failures": [],
+      "coverage": []
+    },
     "commitResult": {
       "quoteId": "quote_retail_9901_1",
       "unitResults": [

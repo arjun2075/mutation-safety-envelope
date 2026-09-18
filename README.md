@@ -1,15 +1,18 @@
 # Mutation Safety Envelope (MSE)
 
-**Status:** Experimental / External Review Candidate — v0.3.0
+**Status:** Experimental / External Review Candidate — v0.4.0-dev.0 (unreleased)
 **License:** Apache-2.0
 
-> **v0.3.0 is a breaking revision of v0.2.0.** It adds quote-declared,
-> live-evaluated cross-unit admission dependencies and structured repair
-> witnesses while preserving v0.2.0's per-unit outcomes and reconciliation.
-> See [`/docs/v0.3-review-response.md`](docs/v0.3-review-response.md) and
-> [`/spec/normative-spec.md`](spec/normative-spec.md) §9. This is proposed
-> MSE design work informed by UCP Discussion #799, not a claim of UCP
-> adoption or endorsement.
+> **v0.4.0-dev.0 is a breaking development revision of v0.3.0.** Required
+> admission coverage distinguishes passed/failed relations from repair-dependent
+> deferral, and participating-unit passes can expose current-request or
+> prior-final satisfaction on both response paths. A pass states the complete
+> participant set its evidence must cover, and current-request evidence is
+> correlated with per-unit execution outcomes so an admitted pass is never read
+> as proof the satisfaction took effect. The recorded v0.3.0 reproduction needs three refusal/repair cycles;
+> independent aggregation reports all three failures together. See the
+> [decision](docs/request-reporting-design.md) and [audit](docs/request-reporting-audit.md).
+> This is proposed MSE design work, not UCP adoption or endorsement.
 
 > MSE is **not** an official specification of UCP, ACP, Shopify, Salesforce,
 > IATA, Paid, Stripe, Paddle, Zuora, Chargebee, or any other vendor or
@@ -45,8 +48,10 @@ Quote (one or more independently committing units)
    └── stable directional admission relations (no frozen witness)
    ↓
 Admission against live state
-   ├── refused before dispatch → witness → amended proposal → new quote
-   └── passed
+   ├── refused before dispatch → admission report + failure witnesses
+   │                              → amended proposal → new quote
+   └── passed → wire-visible admission report + satisfaction evidence
+         │            (admission-time truth; realization derived at execution)
          ↓
 Commit  →  one result PER UNIT, not one for the whole mutation:
    ├── unit A: APPLIED
@@ -87,6 +92,8 @@ outcome; it is the known no-dispatch branch. See
   v0.3-design-decision.md  Admission response and repair-by-requote decision
   v0.3-review-response.md  Traceability for the live-witness iteration
   v0.3-audit-report.md     Semantic and consistency self-review findings
+  request-reporting-design.md  v0.4.0-dev.0 coverage decision
+  request-reporting-audit.md   Request-level semantic/consistency audits
 ```
 
 ## What MSE does not define
@@ -118,14 +125,15 @@ different domains instantiate the same core without adding to it.
 
 ```bash
 npm install
-npm test                # runs behavioral + schema-conformance tests (142 as of v0.3.0)
+npm test                # current-contract tests
+npm run test:baseline   # 2 separate cases against recorded v0.3.0 core
 npm run build            # tsc typecheck/build
 npm run validate-schema  # compiles the JSON Schema standalone under ajv strict mode
 ```
 
 ## Before you rely on this
 
-This is a v0.3.0 external-review candidate, not a finished or
+This is a v0.4.0-dev.0 development revision, not a finished or
 production-hardened specification. Start with:
 
 1. [`/docs/DISCLAIMER.md`](docs/DISCLAIMER.md) — what MSE is not.
@@ -142,7 +150,7 @@ production-hardened specification. Start with:
    and has not actually been tested.
 7. [`/docs/readiness-report.md`](docs/readiness-report.md) — the
    publication readiness report, covering both the v0.1.0 publication and
-   the current v0.3.0 revision's status.
+   the historical v0.3.0 revision's status; current findings are in the request-reporting audit.
 
 ## Review question
 

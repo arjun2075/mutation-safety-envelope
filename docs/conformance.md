@@ -1,6 +1,6 @@
 # Conformance
 
-**Status:** v0.3.0, external review candidate.
+**Status:** v0.4.0-dev.0, unreleased development revision.
 
 > Conformance here means conformance with **this repository's own** schema
 > and normative spec. It is not, and does not imply, conformance with any
@@ -13,7 +13,7 @@
 
 ## What "conformant" means for a provider
 
-A provider claiming MSE v0.3.0 conformance MUST:
+A provider claiming MSE v0.4.0-dev.0 conformance MUST:
 
 1. Produce `MutationQuote` documents that validate against
    [`/schema/mse-core.schema.json`](../schema/mse-core.schema.json),
@@ -30,7 +30,7 @@ A provider claiming MSE v0.3.0 conformance MUST:
 4. Evaluate every `AcceptanceConstraint` fail-closed per spec §3.2 before
    returning `APPLIED` for the unit(s) it names, correlating by
    `effectId` (not `type`) across all units in the quote (spec §7a).
-5. Evaluate every applicable quote-declared admission relation against
+5. Evaluate every independently evaluable applicable quote-declared admission relation against
    current binding state before dispatch. A known `ADMISSION_REFUSED`
    MUST mean zero commercial mutations were dispatched. Every failure
    MUST name a declared relation and carry an honest `COMPLETE`, `PARTIAL`,
@@ -38,6 +38,49 @@ A provider claiming MSE v0.3.0 conformance MUST:
    witness is sufficient only for its relation and MUST NOT authorize
    added transitions or bypass a new quote. Admission evaluation itself
    MUST be observational and MUST NOT dispatch a quoted transition.
+   Both response paths MUST expose an admission report covering every
+   declaration with PASSED, FAILED, or genuinely
+   repair-dependent DEFERRED (spec §3.2). Failures and FAILED coverage entries
+   MUST correspond exactly. Provider-side traces must substantiate evaluation
+   and deferral; schema validity alone does not prove exhaustive reporting.
+   Early stop and missing evaluators MUST fail before dispatch, without
+   inventing a failure witness. A relation declaring `passEvidence: REQUIRED`
+   MUST have non-empty PASSED satisfaction records and MUST state the complete
+   `requiredParticipants` set that evidence covers; evidence MUST cover that
+   set exactly, so a PASSED citing only a subset is non-conformant. A
+   required participant is (unitLocator, transition): evidence MUST match
+   both, so a satisfaction for the right unit carrying a different transition
+   does not cover it. Core MUST NOT infer participation from shared
+   `scopeRef`, which says only where locators resolve; an unrelated
+   same-scope transition is not a participant. Because the relation
+   declaration carries no participant basis, **binding trace conformance MUST
+   validate that the stated set is semantically complete**; core establishes
+   internal correspondence only.
+   A `PRIOR_FINAL_TRANSITION` record MAY cite a locator the current quote
+   also carries, including with the same opaque transition value:
+   `transitionRef` identifies the historical occurrence, and the protocol
+   never declares transitions non-repeatable per unit. Core therefore cannot
+   detect a current-request satisfier relabelled as history. Authenticating
+   that a cited occurrence really happened, and that it satisfies the
+   relation, is entirely a binding obligation. A binding MUST resolve the
+   cited `transitionRef` to exactly one historical occurrence within that
+   unit and verify its transition and finalization instant.
+   Current-request records must correlate to quoted units; prior records must
+   cite a stable transition reference and an ISO finalization time satisfying
+   `finalizedAt <= evaluatedAt`. Only binding-confirmed final history
+   qualifies. Binding trace conformance must catch well-shaped false history
+   that domain-blind core validation cannot prove false.
+   Treat a `CURRENT_REQUEST` record as admission-time truth only: it
+   establishes that the required transition was present when admission ran,
+   never that the satisfaction took effect. When a `COMMIT_RESULT` is
+   available, every such record MUST be correlatable with its unit's
+   `unitResult`, and a reader MUST NOT treat the pass as execution-time
+   realized satisfaction when that unit is `REFUSED` or `INDETERMINATE`
+   (spec §3.2a). That is a reporting obligation: it neither requires ordered
+   dispatch nor refuses the dependent unit. Consumers carry the matching
+   normative duty: once a `COMMIT_RESULT` exists, a consumer MUST NOT read
+   `CURRENT_REQUEST` evidence as realized satisfaction without performing that
+   correlation, and MUST NOT assume the favorable reading when it cannot.
 6. Produce a `CommitResult.unitResults` entry for **every** unit in the
    quote — no silent omission, no duplicates, no unknown `unitRef` (spec
    §1b) — each giving exactly one of `APPLIED` / `REFUSED` /
@@ -111,7 +154,12 @@ A conformant provider is **not** required to:
 
 ## Self-check tooling in this repository
 
+- `node scripts/reproduce-v0.3.mjs` extracts the recorded base core and runs
+  the two unchanged-contract characterization cases (3 refusal/repair cycles).
 - `npm test` runs:
+  - `test/request-reporting.test.ts` — independent aggregation, fresh union
+    repair, authorization, mixed outcomes, dependency deferral, adversarial
+    omission/false-trace cases, and schema versus runtime coverage negatives.
   - `test/core.test.ts` — reference-implementation behavioral tests
     (constraint evaluation, expiry, EXACT-guarantee-drift detection,
     committed-effect ownership, receipt correlation-chain integrity,

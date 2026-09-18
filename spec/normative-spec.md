@@ -1,7 +1,7 @@
 # Mutation Safety Envelope (MSE) — Normative Specification
 
-**Version:** v0.3.0
-**Status:** Experimental / External Review Candidate
+**Version:** v0.4.0-dev.0
+**Status:** Experimental / Unreleased development revision
 **Conformance to:** [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) keywords (MUST, SHOULD, MAY, etc.) are used as defined there.
 
 > MSE is **not** an official specification of UCP, ACP, Shopify, Salesforce,
@@ -14,6 +14,13 @@ This document describes the rules that schema cannot express on its own,
 and the design rationale behind the schema's shape. Where this document and
 the schema disagree, treat that as a bug report against one of the two, not
 as license to pick whichever is convenient — file an issue.
+
+**v0.4.0-dev.0 adds required admission evaluation coverage and wire-visible
+pass-satisfaction evidence**, a breaking
+pre-1.0 revision of v0.3.0. Independent aggregation was already required by
+§3.2; the new representation distinguishes evaluated results from legitimate
+dependency deferral. See [the executable decision gate](../docs/request-reporting-design.md)
+and §9a. The v0.3.0 tag and prerelease are unchanged.
 
 **v0.3.0 is a breaking revision of v0.2.0.** It retains v0.2.0's
 per-unit outcomes and read-based reconciliation, and adds the separate
@@ -37,7 +44,7 @@ existing commercial state. It defines:
   confidence (`CommittingUnit`, `Effect`, `Guarantee`);
 - how a quote declares directional cross-unit admission relations and how
   a known pre-dispatch failure reports an honest repair witness
-  (`AdmissionRelation`, `AdmissionRefusal`);
+  (`AdmissionRelation`, `AdmissionReport`, `AdmissionRefusal`);
 - how a caller states the bounds it requires before accepting a mutation
   (`AcceptanceConstraint`);
 - the three legal per-unit outcomes of attempting to commit a mutation,
@@ -199,6 +206,12 @@ own `UnitResult`; one can be `APPLIED` while a required companion is
 outcome needs a stronger execution/transaction guarantee outside this
 relation.
 
+This remains true when the companion is the unit a `PASSED` entry cited as
+its satisfier. A satisfying transition that ends `REFUSED` or
+`INDETERMINATE` does not retroactively invalidate admission and does not
+refuse the dependent unit. It does mean the satisfaction was not realized,
+which §3.2a requires the response to make visible rather than prevent.
+
 ---
 
 ## 2. The three uncertainty windows
@@ -313,33 +326,235 @@ against the same acceptanceConstraints carried in the request — a client
 check is not a substitute for provider enforcement, since a caller cannot
 be trusted to have evaluated its own constraints honestly (or at all).
 
-After quote-level safety checks and before dispatching any commercial
-mutation, a provider MUST evaluate every applicable quote-declared
-`AdmissionRelation` against the submitted transitions and current binding
-state. The evaluation itself MUST be observational with respect to the
-commercial mutation: a binding MUST NOT dispatch any quoted transition from
-inside an admission evaluator. A provider MAY evaluate several relations
-together, but a returned failure for one relation MUST NOT claim that
+Before returning a correlated commit result and before dispatching any commercial
+mutation, a provider MUST evaluate every independently evaluable applicable
+quote-declared `AdmissionRelation` against the submitted transitions and current
+binding state. It MUST report all failures discovered in that pass together.
+Fail-fast over independent relations violates this requirement (also present
+in v0.3.0). A genuinely repair-dependent relation MAY be deferred only under
+the coverage rules below. The evaluation itself MUST be observational with
+respect to the commercial mutation: a binding MUST NOT dispatch any quoted
+transition from inside an admission evaluator. A provider MAY evaluate several
+relations together, but a returned failure for one relation MUST NOT claim that
 repairing it makes every other relation—or the whole request—admissible.
 
 `CommitResponse` has exactly one branch:
 
 - `ADMISSION_REFUSED` carries an `AdmissionRefusal` and means this
   submission dispatched **no** commercial mutation;
-- `COMMIT_RESULT` carries the v0.2.0 `CommitResult` with unchanged complete
-  per-unit coverage and determinacy semantics.
+- `COMMIT_RESULT` carries both an `AdmissionReport` and the v0.2.0
+  `CommitResult`. The report concerns admission; the result retains unchanged
+  complete per-unit execution coverage and determinacy semantics.
 
-An `AdmissionRefusal` MUST correlate to the evaluated `quoteId` and the
-originating `proposalId`, carry an ISO 8601 `evaluatedAt`, and contain at
-least one failure. Its optional `stateRef` is opaque evidence of the state
-the binding evaluated; neither it nor `evaluatedAt` is a lock.
+An `AdmissionReport` MUST correlate to the evaluated `quoteId` and the
+originating `proposalId`, carry an ISO 8601 `evaluatedAt`, and carry `failures`
+and `coverage`. Its optional `stateRef` is opaque evidence of evaluated state;
+neither it nor `evaluatedAt` is a lock. `AdmissionRefusal` is the
+failure-bearing specialization and MUST contain at least one failure. A
+`COMMIT_RESULT` report MUST contain no failures. A known quote with no declared
+relations still carries an empty report, so omission cannot hide whether the
+admission boundary ran.
+
+Every `AdmissionReport` MUST carry `coverage`, with exactly one
+`AdmissionCoverage` entry per quote-declared relation, including relations
+found inapplicable by evaluation. Entries MUST use one of:
+
+- `PASSED`: evaluated at this pass's state and did not fail. A relation whose
+  quote declaration carries `passEvidence: REQUIRED` MUST also carry a
+  non-empty `satisfactions` list, so its pass cannot be an unexplained absence
+  of failure, and MUST carry a non-empty `requiredParticipants` set stating
+  the complete participant set that evaluation required. Other relation
+  classes MAY define inapplicability as a pass without satisfaction records.
+- `FAILED`: evaluated and failed; exactly one matching `failures` entry MUST
+  exist. Every failure MUST have exactly one FAILED coverage entry.
+- `DEFERRED`: applicable, but evaluation requires repair of another relation
+  in a new proposal/state. It MUST carry nonempty, unique `dependsOn` relation
+  IDs and MUST NOT carry a failure witness for the unevaluated relation.
+
+Only DEFERRED entries may carry `dependsOn`. Each dependency MUST name another
+quote-declared relation and MUST be a genuine binding dependency on its repair,
+not a provider's preferred iteration order. Dependency paths MUST terminate
+in a reported FAILED relation; cycles, self references, and PASSED dependencies
+are invalid. Dependencies express only the reason for deferral in this pass,
+not a generic execution workflow or an instruction to dispatch repairs.
+
+Each `AdmissionSatisfaction` is one branch of a closed discriminated union:
+
+- `CURRENT_REQUEST` carries the participating quote-local `unitRef` and the
+  opaque transition from that quoted unit. It MUST NOT carry historical
+  finality or correlation fields.
+- `PRIOR_FINAL_TRANSITION` carries the participating binding-scoped
+  `unitLocator`, opaque transition, stable non-empty `transitionRef`, and ISO
+  8601 `finalizedAt`. It MUST NOT carry a quote-local `unitRef`.
+
+Transitions are opaque to the core. Where this specification requires two
+transitions to be equal, the comparison MUST be **structural**: JSON object
+member order is a serialization detail and MUST NOT affect identity, while
+array order remains semantic. An implementation MUST NOT compare transitions
+by naive serialization, and MUST NOT interpret any field inside one.
+
+Every participant MUST belong to the relation's declared scope. A
+current-request transition MUST match the cited quoted unit. One relation MUST
+NOT repeat satisfaction for the same binding-scoped unit, including once from
+each source. This supports all-current, all-prior, and mixed satisfaction
+without assigning domain meaning to an operation or state.
+
+`requiredParticipants` states the complete participant set the relation
+required at this evaluation pass. It belongs on the coverage entry rather than
+the quote declaration because the satisfying set is live state resolved at
+admission, not stable quote material (§1d). Each entry names a binding-scoped
+`unitLocator` within the relation's declared scope plus the opaque
+`transition` that participant had to contribute. Duplicate participants, an
+empty set, and out-of-scope participants are invalid; the field MUST NOT
+appear on a FAILED or DEFERRED entry.
+
+A required participant is the pair **(`unitLocator`, `transition`)**, not a
+locator alone. One relation MUST NOT state two required transitions for the
+same binding-scoped unit, so duplicate detection is locator-keyed, but the
+declared transition is part of what must be satisfied.
+
+When `requiredParticipants` is present, `satisfactions` MUST cover it
+**exactly**. Every required participant MUST have a satisfaction record whose
+locator matches it **and** whose `transition` is structurally equal to the
+transition that participant was required to contribute. No record may cite a
+participant outside the set. A `PASSED` entry citing only a subset of its
+required participants is invalid, and evidence for the right unit carrying a
+different transition does **not** cover that participant: a satisfaction for
+one transition never discharges a requirement for another, even on the same
+unit. Without this, a pass that cites one of two required participants, or
+substitutes a different transition, is indistinguishable on the wire from a
+complete one.
+
+### What core can and cannot establish here
+
+Core checks **internal correspondence**: that the stated set is well formed,
+that evidence matches it exactly by unit and transition, and that no record
+cites a transition other than the one required. It does not and cannot
+check that the stated set is the *semantically complete* set the relation
+actually required.
+
+Core MUST NOT infer relation participation from shared scope. `scopeRef`
+declares where a locator is **resolved**; it does not assert that every
+transition inside that scope participates in every relation. A quote may
+legitimately carry an unrelated same-scope transition — for example a cancel
+on one unit alongside a redeem gate on another — and that unit is not a
+participant in the redeem relation. An implementation that treated every
+same-scope non-trigger quoted unit as required would reject conforming
+proposals, including the amended proposal a binding's own `COMPLETE` witness
+produces.
+
+The current `AdmissionRelation` declaration carries `triggerUnitRefs` and
+`scopeRef` but **no participant basis**, so the required set is not derivable
+from the quote. This is an accepted boundary of this revision, not an
+oversight. Consequently a producer that omits a participant from both
+`requiredParticipants` and `satisfactions` leaves the two arrays mutually
+consistent, and core cannot disprove it.
+
+**Binding trace conformance MUST therefore validate that
+`requiredParticipants` equals the set the declared relation actually required
+at the evaluated state.** Semantic completeness of the stated set is a
+binding obligation unless and until a future revision gives the quote
+relation an explicit participant basis. The retail binding discharges it by
+re-evaluating its gates against real state and comparing full coverage,
+including the stated participant sets.
+
+#### Prior-final evidence may coexist with current activity on the same unit
+
+A `PRIOR_FINAL_TRANSITION` record MAY cite a `unitLocator` that the current
+quote also carries, **including with the same opaque `transition` value**.
+Validation MUST NOT reject a record on either ground.
+
+The reason is what identifies a historical occurrence. `unitLocator`
+identifies the domain unit. `transition` is an opaque operation value whose
+meaning is binding-owned, and this specification nowhere declares
+transitions unique or non-repeatable for a unit. `transitionRef` is the
+field that identifies the occurrence. A unit supporting a repeatable
+operation may therefore have a genuinely final occurrence in its history
+and a freshly requested transition of the same shape in this quote; the two
+are distinct events, and the current one failing says nothing about the
+historical one.
+
+Consequently "no outcome in this response" (§3.2a) means **the cited
+historical occurrence has no `unitResult` in this response**, not that the
+locator is absent from the quote.
+
+This is deliberately not the alternative, source-exclusive model, in which
+`PRIOR_FINAL_TRANSITION` would be permitted only for locators absent from
+the quote. That model is coherent, but it would forbid reasserting a
+repeatable transition and would require this specification to declare
+transitions non-repeatable per unit, which no binding evidence supports.
+
+The cost is explicit: a non-conformant producer may relabel a
+current-request satisfier as prior final history, and core will accept it.
+Core cannot detect this, because it holds the quote but not the unit's
+history, and because a producer blocked from reusing one transition value
+can simply cite another. Authenticating that a cited occurrence really
+happened is therefore wholly a binding trace-conformance obligation, for
+this and every other false-history claim.
+
+`PRIOR_FINAL_TRANSITION` evidence MUST additionally satisfy `finalizedAt <=
+evaluatedAt` on the report that cites it. Evidence cannot have become final
+after the pass that reported it as already-final history. Equality is
+permitted: a transition finalized at the evaluation instant is admissible
+evidence. This is a consistency check over two timestamps already on the wire
+and is in addition to, not a replacement for, `finalizedAt` format validation.
+
+A missing coverage entry, an unknown relation, a duplicate reference, or a
+coverage/failure contradiction is invalid. Early stopping MUST NOT masquerade
+as PASSED or DEFERRED. If evaluation cannot be completed or justified by these
+dependency rules, a provider MUST stop before dispatch and use its binding's
+error mechanism; it MUST NOT invent a known admission failure. In particular,
+absence of an evaluator is not an UNAVAILABLE repair witness.
+
+`coverage` and `failures` are correlated by relation identity; `dependsOn`
+is a set of relation identities, `satisfactions` a set of participants,
+`requiredParticipants` a set of required participants, and a witness's
+`requiredTransitions` a set of units that must be added to repair the
+relation — it names what is missing, never an order in which to add it.
+Their array order carries no semantic meaning. Providers SHOULD use
+stable ordering for reproducible diagnostics, while callers and validators
+MUST NOT infer evaluation order, dependency priority, or result meaning from
+array position.
+
+Coverage is a promise about this request's **one evaluation pass at the
+evaluated binding state**, not about future requests or a locked snapshot.
+Bindings MUST document the state/read consistency of that pass and the real
+inputs preventing deferred evaluation. Core/schema checks can validate shape
+and correspondence, but only binding evidence can establish that PASSED,
+FAILED, or DEFERRED is truthful. JSON Schema alone cannot cross-check arbitrary
+relation IDs against a quote or correlate the two arrays; runtime validation
+and provider-side trace conformance are also required.
+
+Before dispatch, the reference provider requires hook coverage even if no
+failures were returned; all entries must then be PASSED. It preserves the
+validated report and attaches it beside, never inside, `CommitResult` on the
+successful path. An unknown quote cannot provide quote/proposal correlation
+and therefore fails rather than fabricating a report.
+
+Only a transition known final may support `PRIOR_FINAL_TRANSITION` evidence.
+Submitted, pending, provisional, and failed transitions MUST NOT qualify. If a
+terminal transition becomes visible only after finalization, a stale read can
+show older state and cause rejection, which fails closed. A state source that
+reports completion before finality can instead produce an unsafe pass. This
+evidence narrows the snapshot problem for monotonic terminal transitions; it
+does not solve general distributed-state or check-to-dispatch consistency.
+Each binding MUST document its read consistency and finality rules.
+Provider/binding trace conformance, not the domain-blind core, MUST substantiate
+that opaque history is truthful and semantically sufficient.
+
+An aggregate set of COMPLETE witnesses permits a union amendment only if the
+binding can reconcile and authorize those transitions. It does not promise
+that the next proposal will pass, bound remaining repair round trips under
+state changes or newly activated dependencies, or guarantee atomic commit.
 
 Every failed relation MUST identify a relation declared by the quote and
 carry exactly one explicit witness disposition:
 
 - `COMPLETE` MUST include a non-empty `requiredTransitions` list that is
   sufficient to construct an amendment for **that relation at that
-  evaluated state**;
+  evaluated state**. The list is a set: its order is not semantic, and a
+  conformance comparison MUST NOT treat a permutation of it as a different
+  witness;
 - `PARTIAL` MUST include a non-empty informative list, but the provider
   MUST NOT advertise it as sufficient for local repair;
 - `UNAVAILABLE` carries no transition list because the provider cannot
@@ -404,6 +619,167 @@ One unit's outcome MUST NOT be inferred from another's. A provider
 returning `APPLIED` for `unit_a` and `INDETERMINATE` for `unit_b` in the
 same `CommitResult` has produced a perfectly ordinary result, not an edge
 case requiring special handling.
+
+### 3.2a Admission-time satisfaction vs. execution-time realization
+
+A `CURRENT_REQUEST` satisfaction record establishes exactly one thing: the
+required transition **was present in the evaluated proposal when admission
+ran**. It MUST NOT be read as proof that the satisfaction took effect.
+
+At admission a current-request satisfier has only been *requested*, which is
+the same not-yet-final condition the `PRIOR_FINAL_TRANSITION` branch excludes
+for prior history. Because acceptance constraints come from the caller, a
+caller can deliberately produce a response in which admission passed on a
+cited transition that the same response then refuses: the request redeems two
+units, a constraint refuses one of them, and the other is `APPLIED`. The
+`PASSED` record is truthful about admission and contradicted by execution.
+
+Admission-time `PASSED` is therefore **not** rewritten, downgraded, or
+recomputed by execution. The two questions stay separate:
+
+- admission answers *was the required transition present when the gate ran*;
+- realization answers *did that satisfaction take effect*, which only a
+  `COMMIT_RESULT` can answer.
+
+When a `COMMIT_RESULT` is available, validation MUST correlate every
+`CURRENT_REQUEST` satisfaction record with the `unitResult` of the unit it
+cites. The correlation is total and deterministic:
+
+| Satisfaction source | Correlated `unitResult.outcome` | Realization |
+| --- | --- | --- |
+| `CURRENT_REQUEST` | `APPLIED` | `REALIZED` |
+| `CURRENT_REQUEST` | `REFUSED` | `NOT_REALIZED` |
+| `CURRENT_REQUEST` | `INDETERMINATE` | `INDETERMINATE` |
+| `PRIOR_FINAL_TRANSITION` | none in this response | `REALIZED` |
+
+A `PRIOR_FINAL_TRANSITION` record is `REALIZED` and carries no correlated
+outcome, **conditional on a binding-owned claim core does not verify**. The
+division is:
+
+- core validates the record STRUCTURALLY: source shape, participant scope,
+  the transition's correspondence to the asserted required participant,
+  `finalizedAt` format, and `finalizedAt <= evaluatedAt`;
+- the binding authenticates it SEMANTICALLY: that the cited `transitionRef`
+  resolves to a real historical occurrence with that transition and
+  finalization instant, and that the occurrence satisfies the relation.
+
+Given a conformant binding, the satisfaction occurred historically rather
+than in this request, which is why it realizes; the record's `source`
+carries that distinction. Core accepting a prior-final record is NOT by
+itself evidence that the cited history happened. Reporting it as inapplicable would withhold a
+verdict in the case where the evidence is strongest, and would collide with
+the separate `NOT_APPLICABLE` admission coverage status this revision
+deliberately did not add.
+
+A `CURRENT_REQUEST` record whose cited `unitRef` has no `unitResult` in the
+correlated `CommitResult` is invalid: realization cannot be determined, and
+§1b already requires complete per-unit coverage.
+
+#### The consumer rule (normative)
+
+Discovering the contradiction during validation is not sufficient. The
+semantic hole is that a reader can see `PASSED` and infer that the
+satisfaction took effect. The obligation therefore binds consumers, not only
+validators:
+
+> Once a `COMMIT_RESULT` exists for a quote, a consumer **MUST NOT** interpret
+> `CURRENT_REQUEST` satisfaction evidence in an admission-time `PASSED` entry
+> as realized satisfaction without correlating that evidence to the
+> `unitResults` of the same response. The correlated outcome is decisive:
+> `APPLIED` means realized, `REFUSED` means **not** realized, and
+> `INDETERMINATE` means realization is unknown and MUST NOT be assumed in
+> either direction.
+
+A consumer that reads `PASSED` alone and concludes the gated transition
+occurred is **non-conformant**, even though the `PASSED` entry itself is
+truthful. Concretely, a consumer MUST NOT, on the basis of an admission
+`PASSED` alone:
+
+- report or display the gated transition as having occurred;
+- treat a coupled fee, entitlement, or obligation the gate exists to capture
+  as captured;
+- suppress reconciliation for an `INDETERMINATE` satisfier; or
+- skip its own correlation because a producer, intermediary, or validator is
+  presumed to have performed it.
+
+Where a consumer cannot perform the correlation itself — for example a reader
+handed `coverage` without the sibling `CommitResult` — it MUST treat
+`CURRENT_REQUEST` evidence as admission-time only and MUST NOT upgrade it to
+realized satisfaction. Absence of the correlated result is not permission to
+assume the favorable reading; this is the same fail-closed posture §3.2
+applies to constraint evaluation.
+
+This rule is what keeps realization derived rather than duplicated onto the
+wire. The producer is not required to compute or carry a verdict the consumer
+is obliged to derive from facts it already holds.
+
+To keep the obligation from resting on an optional call, the correlation
+SHOULD be part of an implementation's standard `COMMIT_RESULT` validation
+path rather than a separate utility a consumer may never invoke. The
+reference implementation does this in two places: validating a response with
+`assertCommitResponseWellFormed` **returns** the realization report, and
+`ReferenceProvider.satisfactionRealization(quoteId)` answers the same
+question after commit. Both return nothing when no execution outcome is
+available, which is the fail-closed case above and never permission to assume
+the favorable reading.
+
+A derived aggregate over these entries MUST be non-vacuous: "all realized"
+holds only when there is at least one entry **and** every entry is
+`REALIZED`. An empty entry set MUST NOT report as fully realized, because a
+response that evidenced nothing has realized nothing; reporting otherwise
+would invert the fail-closed reading this section requires.
+
+The scope of that aggregate is **the satisfaction records present in the
+report**, not the set of admission relations. A relation that passed without
+supplying satisfaction evidence contributes no realization entry and is
+therefore neither counted nor vouched for. A report carrying one
+evidence-bearing realized relation alongside one evidence-free passed
+relation aggregates to "all realized", and that verdict says nothing
+whatever about the second relation. A consumer MUST NOT read the aggregate
+as proof that every gate was realized, and MUST inspect `coverage` to learn
+which relations supplied evidence at all.
+
+Nor is the aggregate a statement about commit success. A request admitted
+entirely on prior final history, whose quote then expires before dispatch,
+yields `ALL_REFUSED` per-unit outcomes and a fully realized satisfaction
+aggregate in the same response. Both are correct: nothing committed, and
+the cited historical satisfaction still occurred. A consumer asking whether
+the mutation succeeded MUST read `unitResults` (§1b, §1c), never this
+aggregate.
+
+`NOT_REALIZED` and `INDETERMINATE` are **not** response-level errors. They are
+the ordinary consequence of non-atomic execution (§1d) and MUST NOT cause a
+conformant response to be rejected. What they forbid is a reader taking the
+pass at face value.
+
+A realization entry is not self-describing. It carries the relation, the
+source, and the participant, but not the satisfaction's transition, so it
+identifies its satisfaction only together with the `AdmissionReport` it was
+derived from. Within one report the tuple (`relationId`, `source`,
+participant) is unique, because a relation MUST NOT repeat satisfaction for
+one binding-scoped unit, so a prior transition A and a different current
+transition B on the same unit remain distinguishable when correlated
+properly. Consumers MUST join on that tuple rather than assume an entry
+stands alone.
+
+Like `aggregateHint` (§1c), this correlation is **non-authoritative and purely
+derived**: it is computed from `coverage[].satisfactions` and
+`commitResult.unitResults`, both already on the wire, and adds no field to the
+admission entry. The reference implementation exposes it as a checkable pair —
+`deriveSatisfactionRealization` and `assertSatisfactionRealizationConsistent`
+in [`/src/core/validate.ts`](../src/core/validate.ts). A caller MUST NOT read
+a realization verdict as an admission result or an admission result as a
+realization verdict.
+
+This does **not** make `REQUIRES_COINCLUSION` atomic or ordered. A binding is
+**not** required to dispatch a dependent unit only after its satisfiers are
+`APPLIED`, and a dependent whose satisfier ends `REFUSED` or `INDETERMINATE`
+is **not** thereby refused. Ordered dispatch remains one legitimate binding
+strategy a binding MAY adopt for a directional gate, outside this relation and
+outside the core; §1d is unchanged. Making the contradiction visible is a
+reporting obligation, not an execution guarantee.
+
+---
 
 ### 3.3 CommitResult → Receipt
 
@@ -860,6 +1236,21 @@ an untrackable one rather than omission.
    The reference provider is synchronous and in-process; it does not prove
    that a distributed provider can offer the same boundary without a
    binding-specific transaction or final revalidation mechanism.
+7. **Whether execution-time realization should be carried on the wire or
+   derived by validation.** §3.2a derives it, because both inputs
+   (`coverage[].satisfactions` and `commitResult.unitResults`) are already in
+   the response and a derived verdict cannot drift from them. The cost is that
+   a reader who inspects only `coverage` still sees an unqualified `PASSED`
+   and must run the correlation (or trust a party who did) to learn that a
+   satisfier was refused. A wire-visible per-record verdict would make the
+   contradiction legible without computation, at the price of a redundant,
+   forgeable field that can contradict the `unitResults` beside it, and of
+   admission data that is only completable after execution. A third option —
+   an `AdmissionReport`-level flag asserting that every current-request
+   satisfier was applied — is smaller but collapses the per-record detail
+   that the mixed cancel case needs. This revision takes the derived option
+   and leaves the wire-visible variant open pending a reader that cannot run
+   the correlation itself.
 
 ---
 
@@ -873,7 +1264,7 @@ surface:
 | Quote wire schema | `CommittingUnit` had `unitRef` + `effects`; no `admissionRelations` | Every unit additionally requires `unitLocator` + `transition`; every quote requires `admissionRelations` (possibly empty). Old closed-schema consumers reject these fields, and old producers omit required fields. |
 | Commit wire/API | `commit()` returned `CommitResult` directly | `commit()` returns discriminated `CommitResponse`; callers must branch before reading `commitResult`. |
 | TypeScript callers | Direct access to `response.unitResults` | Narrow `response.kind === "COMMIT_RESULT"`, then access `response.commitResult.unitResults`; handle `ADMISSION_REFUSED`. |
-| Existing providers | No proposal retention or admission hook | Populate new quote fields, retain/map submitted transitions, and evaluate declared relations; the reference provider fails closed with `UNAVAILABLE` when a relation exists without an evaluator. |
+| Existing providers | No proposal retention or admission hook | Populate new quote fields, retain/map submitted transitions, and evaluate declared relations; the v0.3.0 reference provider failed closed with `UNAVAILABLE` when a relation existed without an evaluator (superseded by §9a). |
 | Per-unit result/reconciliation/receipt | v0.2.0 outcomes and semantics; schema/types accidentally allowed `APPLIED` without `committedEffects` despite normative prose | Preserved inside `COMMIT_RESULT`; schema/types now enforce the existing requirement that `APPLIED` carries `committedEffects` (even when empty) and that outcome-specific fields are exclusive. |
 
 There is no legal in-place amendment of a v0.2.0/v0.3.0 quote. A repaired
@@ -911,3 +1302,50 @@ identity-agnostic, and domain-blind boundaries (§1) are unchanged. See
 [`/docs/v0.2-review-response.md`](../docs/v0.2-review-response.md) for the
 full account of what was falsified, what changed, and what remains
 unresolved.
+
+
+## 9a. v0.3.0 → v0.4.0-dev.0 compatibility
+
+Required report coverage, `AdmissionSatisfaction`, `AdmissionRelation.passEvidence`,
+and the public `AdmissionCoverage` union change the closed schema and TypeScript
+API. `COMMIT_RESULT` now requires a sibling `admissionReport`; admission data is
+not merged into `CommitResult`. `AdmissionEvaluation` hooks must return coverage
+on both failed and successful evaluations. Missing hooks now
+raise a pre-dispatch error instead of fabricating UNAVAILABLE failure witnesses.
+These breaks warrant a new minor revision under this pre-1.0 project's convention.
+
+`AdmissionCoverage` PASSED entries gain `requiredParticipants`. The JSON
+Schema change is additive — one new optional property and its definition, with
+no path removed and no existing value altered — but **the validation contract
+is strictly stricter, which is a breaking semantic change**. Payloads that
+validated under the earlier `0.4.0-dev.0` state can now fail:
+
+- a `PASSED` entry for a relation declaring `passEvidence: REQUIRED` that
+  omits `requiredParticipants` is now invalid;
+- evidence citing the right unit with a different transition than that
+  participant was required to contribute is now invalid;
+- prior-final evidence whose `finalizedAt` is after the report's
+  `evaluatedAt` is now invalid (unchanged from the previous revision);
+- satisfaction evidence that does not cover the stated set exactly is now
+  invalid; and
+- `PRIOR_FINAL_TRANSITION` evidence with `finalizedAt` after the report's
+  `evaluatedAt` is now invalid, where previously only its format was checked.
+
+Producers must emit the participant set; consumers additionally acquire the
+§3.2a correlation obligation. Because this is unreleased development work, the
+strengthening lands in `0.4.0-dev.0` rather than requiring a further revision;
+published v0.3.0 artifacts are unaffected.
+
+Execution-time realization of `CURRENT_REQUEST` evidence is derived by
+validation from data already on the wire (§3.2a). That part adds no wire
+field, no lifecycle state, and no ordering requirement, but it does add a
+normative consumer rule.
+
+Migrate evaluators to record actual evaluation results for every declaration,
+report all independently evaluable failures, and identify genuine repair
+dependencies. Do not populate PASSED solely because a relation is absent from
+an untrusted/incomplete failure list. When a binding declares pass evidence
+required, report current-request or cited prior-final satisfaction and enforce
+its truth through binding trace conformance. Existing witnesses, quote fields,
+per-unit outcomes, reconciliation, and receipts retain their meanings.
+This is unreleased development work; published v0.3.0 artifacts are unchanged.

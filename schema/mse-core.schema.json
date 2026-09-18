@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://mutation-safety-envelope.org/schema/v0.3.0/mse-core.schema.json",
+  "$id": "https://mutation-safety-envelope.org/schema/v0.4.0-dev.0/mse-core.schema.json",
   "title": "Mutation Safety Envelope — Core Schema",
-  "description": "Normative, domain-blind schema for MSE v0.3.0. This schema defines the safety envelope only. Domain-specific vocabulary (SKUs, fares, plans, billing periods, operations, and resource states) belongs in a binding/profile. v0.3.0 adds quote-declared admission relations, live failure witnesses, binding-scoped unit locators, explicit quoted transitions, and a discriminated CommitResponse. See /docs/v0.3-design-decision.md and /spec/normative-spec.md.",
+  "description": "Normative, domain-blind schema for MSE v0.4.0-dev.0. Required admission reports separate evaluated results from dependency deferral and make binding-required pass satisfaction wire-visible on both response paths. This schema defines the safety envelope only. Domain-specific vocabulary belongs in a binding/profile. See /docs/request-reporting-design.md and /spec/normative-spec.md.",
   "$defs": {
     "GuaranteeMode": {
       "type": "string",
@@ -147,6 +147,10 @@
           "type": "string",
           "minLength": 1,
           "description": "Opaque binding scope within which live required UnitLocators are resolved. This declaration is stable; a quote-time list of currently missing units does not belong here."
+        },
+        "passEvidence": {
+          "const": "REQUIRED",
+          "description": "When present, a PASSED coverage entry MUST carry a non-empty satisfactions list. This quote-level declaration makes the boundary explicit without teaching core the binding's state or operation vocabulary."
         }
       }
     },
@@ -353,10 +357,167 @@
       }
     },
 
+    "AdmissionSatisfaction": {
+      "description": "Domain-blind evidence identifying a transition that the binding says satisfied one relation. Core validates shape and correlation, not semantic truth.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "unitRef", "transition"],
+          "properties": {
+            "source": { "const": "CURRENT_REQUEST" },
+            "unitRef": { "type": "string", "minLength": 1 },
+            "transition": {
+              "description": "Opaque transition carried by the quoted unit."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["source", "unitLocator", "transition", "transitionRef", "finalizedAt"],
+          "properties": {
+            "source": { "const": "PRIOR_FINAL_TRANSITION" },
+            "unitLocator": { "$ref": "#/$defs/UnitLocator" },
+            "transition": {
+              "description": "Opaque prior transition whose meaning and finality are binding-owned."
+            },
+            "transitionRef": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Stable binding-defined correlation for the prior transition."
+            },
+            "finalizedAt": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Time at which the cited prior transition became final."
+            }
+          }
+        }
+      ]
+    },
+
+    "AdmissionRequiredParticipant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unitLocator", "transition"],
+      "description": "One participant whose transition a relation required at this evaluation pass, as the pair (unitLocator, transition). Carried on the coverage entry, not the quote declaration, because the satisfying set is live state resolved at admission. Naming the complete set lets validation reject a PASSED that cites only a subset, or that substitutes a different transition on the right unit. Core checks internal correspondence only; it does not derive participation from scopeRef, and semantic completeness of the set is a binding trace-conformance obligation.",
+      "properties": {
+        "unitLocator": { "$ref": "#/$defs/UnitLocator" },
+        "transition": {
+          "description": "Opaque binding-defined transition this participant had to contribute."
+        }
+      }
+    },
+    "AdmissionCoverage": {
+      "description": "Coverage of one quote-declared relation in this evaluation pass; distinct from repair completeness.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "relationId",
+            "status"
+          ],
+          "properties": {
+            "relationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": { "const": "PASSED" },
+            "satisfactions": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "$ref": "#/$defs/AdmissionSatisfaction" }
+            },
+            "requiredParticipants": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/$defs/AdmissionRequiredParticipant" },
+              "description": "The complete participant set this evaluation required. When present, satisfactions MUST cover it exactly by unit AND transition: no omitted participant, none outside it, and no substituted transition. Required alongside evidence when the relation declares passEvidence REQUIRED. Exact correspondence needs the quote and both arrays together, so runtime validation enforces it; JSON Schema alone cannot. Whether the stated set is semantically complete is a binding trace-conformance obligation, not something core can derive."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["relationId", "status"],
+          "properties": {
+            "relationId": { "type": "string", "minLength": 1 },
+            "status": { "const": "FAILED" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "relationId",
+            "status",
+            "dependsOn"
+          ],
+          "properties": {
+            "relationId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "const": "DEFERRED"
+            },
+            "dependsOn": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+
+    "AdmissionReport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["quoteId", "proposalId", "evaluatedAt", "failures", "coverage"],
+      "properties": {
+        "quoteId": { "type": "string", "minLength": 1 },
+        "proposalId": { "type": "string", "minLength": 1 },
+        "evaluatedAt": { "type": "string", "format": "date-time" },
+        "stateRef": {
+          "description": "Optional opaque binding-defined state/version evidence. It is evidence, not a lock."
+        },
+        "coverage": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/AdmissionCoverage" }
+        },
+        "failures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/AdmissionFailure" }
+        }
+      }
+    },
+
+    "SuccessfulAdmissionReport": {
+      "allOf": [
+        { "$ref": "#/$defs/AdmissionReport" },
+        {
+          "type": "object",
+          "properties": {
+            "failures": { "type": "array", "maxItems": 0 }
+          }
+        }
+      ],
+      "description": "AdmissionReport specialization carried beside COMMIT_RESULT; failures MUST be empty because a known admission failure uses ADMISSION_REFUSED."
+    },
+
     "AdmissionRefusal": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["quoteId", "proposalId", "evaluatedAt", "failures"],
+      "required": ["quoteId", "proposalId", "evaluatedAt", "failures", "coverage"],
       "properties": {
         "quoteId": { "type": "string", "minLength": 1 },
         "proposalId": { "type": "string", "minLength": 1 },
@@ -367,6 +528,13 @@
         },
         "stateRef": {
           "description": "Optional opaque binding-defined state/version evidence for the evaluation. It does not itself close the check-to-dispatch gap."
+        },
+        "coverage": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/AdmissionCoverage" },
+          "description": "Exactly one entry per declared relation. FAILED corresponds exactly to failures. DEFERRED dependencies must lead to a failed relation without cycles. Cross-reference and semantic checks require the quote and binding trace; JSON Schema alone cannot enforce them."
         },
         "failures": {
           "type": "array",
@@ -554,7 +722,7 @@
     },
 
     "CommitResponse": {
-      "description": "v0.3.0 outer response. A known pre-dispatch admission refusal is distinct from per-unit commit outcomes. If dispatch may have occurred, the COMMIT_RESULT branch and its INDETERMINATE/reconciliation semantics apply instead.",
+      "description": "Discriminated response. A known pre-dispatch admission refusal is distinct from per-unit commit outcomes. COMMIT_RESULT carries a separate required AdmissionReport beside CommitResult; it does not merge admission into execution or effect finality.",
       "oneOf": [
         {
           "type": "object",
@@ -568,9 +736,10 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["kind", "commitResult"],
+          "required": ["kind", "admissionReport", "commitResult"],
           "properties": {
             "kind": { "const": "COMMIT_RESULT" },
+            "admissionReport": { "$ref": "#/$defs/SuccessfulAdmissionReport" },
             "commitResult": { "$ref": "#/$defs/CommitResult" }
           }
         }
@@ -625,12 +794,13 @@
   },
 
   "type": "object",
-  "description": "This top-level schema is a container for the $defs above. MSE does not mandate a single wire envelope; implementations reference individual $defs (MutationProposal, MutationQuote, CommitRequest, CommitResponse, CommitResult, AdmissionRefusal, Receipt) as needed for their transport.",
+  "description": "This top-level schema is a container for the $defs above. MSE does not mandate a single wire envelope; implementations reference individual $defs (MutationProposal, MutationQuote, CommitRequest, CommitResponse, CommitResult, AdmissionReport, AdmissionRefusal, Receipt) as needed for their transport.",
   "properties": {
     "proposal": { "$ref": "#/$defs/MutationProposal" },
     "quote": { "$ref": "#/$defs/MutationQuote" },
     "commitRequest": { "$ref": "#/$defs/CommitRequest" },
     "commitResult": { "$ref": "#/$defs/CommitResult" },
+    "admissionReport": { "$ref": "#/$defs/AdmissionReport" },
     "commitResponse": { "$ref": "#/$defs/CommitResponse" },
     "receipt": { "$ref": "#/$defs/Receipt" }
   },

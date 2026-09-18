@@ -55,6 +55,38 @@ If dispatch may have occurred, returning `ADMISSION_REFUSED` would falsely
 promise no mutation. The provider MUST instead preserve per-unit determinacy
 and report `INDETERMINATE` plus reconciliation where the outcome is unknown.
 
+## 1c. Prior-transition satisfaction depends on truthful finality
+
+A `PRIOR_FINAL_TRANSITION` satisfaction record is safe only when the binding's
+state source exposes completion after the cited transition is final. For a
+monotonic terminal transition, a stale read sees older state and rejects, so it
+fails closed. A source that marks a submitted or provisional transition done
+can instead admit a request even if that transition later fails. Providers
+MUST document read consistency and finality, and binding trace conformance MUST
+verify the cited transition reference, operation, participant, and finalization
+time. Core validation additionally requires `finalizedAt <= evaluatedAt`, which
+rejects evidence claiming to have become final after the pass that cited it.
+Core validation cannot prove opaque history truthful. This evidence does
+not create a distributed lock or close the general check-to-dispatch gap.
+
+## 1d. Current-request satisfaction is not execution-time realization
+
+A `CURRENT_REQUEST` satisfaction record is an assertion about admission, not
+about execution. At admission the cited transition has only been requested,
+which is the same not-yet-final condition the prior-final branch excludes.
+Because acceptance constraints come from the caller, a caller can deliberately
+construct a response whose `PASSED` evidence the same response contradicts:
+refuse the satisfying unit and let the dependent one apply. A reader that
+trusts the pass alone sees a gate satisfied by a transition that never took
+effect. Validation therefore correlates each record with its `unitResult` and
+reports realization separately (spec §3.2a). The admission entry is not
+rewritten, and the correlation is not an atomicity or ordering guarantee.
+
+Because the required participant set is now stated on the entry, evidence
+covering only a subset of required participants is also rejected rather than
+accepted as a complete pass. Without that set, a provider could satisfy a
+two-participant gate by citing one participant.
+
 ## 2. Fail-closed constraint evaluation is a security property, not just a correctness one
 
 §3.2 of the normative spec requires `AcceptanceConstraint` evaluation to

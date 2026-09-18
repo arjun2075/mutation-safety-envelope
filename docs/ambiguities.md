@@ -225,3 +225,87 @@ binding. It does not resolve §8's genuinely shared-effect ownership problem,
 define a generic constraint language, make co-included units atomic, or prove
 that a distributed provider can close the check-to-dispatch gap without a
 binding-specific transaction/revalidation mechanism.
+
+---
+
+## 10. A PASSED relation hid how it was satisfied — **RESOLVED narrowly in v0.4.0-dev.0**
+
+**Ambiguity/falsification:** prior final delivery redemption or goods
+cancellation satisfied the reported retail gates, but PASSED coverage did not
+tell a reader whether a companion transition was in the request, had completed
+earlier, or the gate had never run.
+
+**Resolution:** relations may declare `passEvidence: REQUIRED`; their PASSED
+coverage then carries one or more source-discriminated satisfaction records.
+Current-request records correlate to quoted units. Prior-final records use the
+existing binding-scoped locator and cite transition correlation plus
+finalization time. Both sources may be mixed. The successful response carries
+the shared admission report separately from `CommitResult`.
+
+This does not prove opaque history truthful, define domain transition states,
+or close the general distributed check-to-dispatch gap. Those remain binding
+trace and consistency obligations. `NOT_APPLICABLE` was not added for prior
+completed transitions because those transitions satisfy these gates.
+
+---
+
+## 11. Current-request satisfaction asserted more than admission knew — **RESOLVED narrowly in v0.4.0-dev.0**
+
+**Ambiguity/falsification:** a `CURRENT_REQUEST` record was treated as
+satisfaction outright, but at admission that transition has only been
+requested, which is the same not-yet-final condition the prior-final branch
+excludes. A caller acceptance constraint could then refuse the satisfying unit
+while the dependent one applied, producing a response whose `PASSED` evidence
+the same response contradicted. Two smaller gaps travelled with it: a PASSED
+could cite a subset of the required participants without the report ever
+stating what was required, and `finalizedAt` was format-checked but never
+compared with the `evaluatedAt` beside it.
+
+**Resolution:** admission-time `PASSED` keeps its meaning and is not
+rewritten. When a `COMMIT_RESULT` is available, validation correlates every
+`CURRENT_REQUEST` record with its `unitResult` and derives realization
+(`APPLIED` realized, `REFUSED` not realized, `INDETERMINATE` indeterminate;
+prior-final evidence is `REALIZED`, because such a record is admissible only
+when the cited transition is already final). PASSED entries for evidence-required
+relations now state the complete `requiredParticipants` set, which evidence
+must cover exactly, and prior-final evidence must satisfy
+`finalizedAt <= evaluatedAt`. See spec §3.2a.
+
+Because the hole was that a *reader* could infer realization from `PASSED`,
+the obligation is stated normatively against consumers, not only validators:
+once a `COMMIT_RESULT` exists, a consumer MUST correlate `CURRENT_REQUEST`
+evidence with `unitResults` before treating it as realized, and MUST NOT
+assume the favorable reading when it cannot correlate.
+
+Evidence must match its required participant by unit **and** transition, so a
+satisfaction for one transition cannot discharge a requirement for another on
+the same unit.
+
+Prior-final evidence may coexist with current activity on the same unit,
+including the same opaque transition value: `transitionRef` identifies the
+historical occurrence, and the protocol never declares transitions
+non-repeatable. The residual gap is therefore broader than a single shape: a
+producer can consistently change both the required participant and its
+prior-final evidence to a different historical transition that core can
+neither authenticate nor evaluate for sufficiency. A genuine prior
+transition coexisting with a different refused current transition on the
+same unit is *not* a contradiction, so core must not reject on the locator
+repeat alone.
+
+Semantic completeness of the stated set, however, is **not** something core
+can establish. An earlier revision of this work tried to derive a floor from
+shared `scopeRef` — treating every same-scope non-trigger quoted unit as a
+required participant — and that inference was wrong: `scopeRef` says where
+locators resolve, not which transitions participate. It rejected conforming
+proposals, including the amended proposal a binding's own COMPLETE witness
+produces. The floor was removed. Because `AdmissionRelation` carries no
+participant basis, a producer omitting a participant from both arrays leaves
+them mutually consistent and core cannot disprove it; binding trace
+conformance owns that property under the current relation shape.
+
+The realization verdict is derived, not carried as admission wire data, so it
+cannot drift from the `unitResults` it comes from. `REQUIRES_COINCLUSION`
+stays non-atomic: no dependent unit waits for its satisfier to become
+`APPLIED`, and a refused satisfier does not refuse the dependent unit. What
+remains open is whether a reader that cannot run the correlation itself needs
+the verdict on the wire (spec §8, item 7).

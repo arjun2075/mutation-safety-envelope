@@ -259,6 +259,7 @@ describe("v0.3.0 admission-message negative cases", () => {
       quoteId: "q1",
       proposalId: "p1",
       evaluatedAt: "2026-09-05T16:00:00Z",
+      coverage: [{ relationId: "retail:requires_companion", status: "FAILED" }],
       failures: [
         {
           relationId: "retail:requires_companion",
@@ -378,5 +379,164 @@ describe("v0.3.0 admission-message negative cases", () => {
       },
     };
     expect(validate(doc)).toBe(false);
+  });
+});
+
+describe("v0.4.0-dev.0 admission report and satisfaction evidence", () => {
+  const success = {
+    kind: "COMMIT_RESULT",
+    admissionReport: {
+      quoteId: "q-pass",
+      proposalId: "p-pass",
+      evaluatedAt: "2026-09-16T20:00:00Z",
+      failures: [],
+      coverage: [{
+        relationId: "retail:gate",
+        status: "PASSED",
+        satisfactions: [{
+          source: "PRIOR_FINAL_TRANSITION",
+          unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+          transition: { operation: "REDEEM" },
+          transitionRef: "transition-42",
+          finalizedAt: "2026-09-16T19:00:00Z",
+        }],
+      }],
+    },
+    commitResult: {
+      quoteId: "q-pass",
+      unitResults: [{ unitRef: "goods", outcome: "APPLIED", committedEffects: [] }],
+    },
+  };
+
+  it("accepts a successful response with reader-facing prior-final satisfaction", () => {
+    expect(validate({ commitResponse: success })).toBe(true);
+  });
+
+  it("rejects a successful response that omits its admission report", () => {
+    const doc = structuredClone(success) as Partial<typeof success>;
+    delete doc.admissionReport;
+    expect(validate({ commitResponse: doc })).toBe(false);
+  });
+
+  it.each(["transitionRef", "finalizedAt"] as const)(
+    "rejects prior-final evidence missing %s",
+    (field) => {
+      const doc = structuredClone(success);
+      delete doc.admissionReport.coverage[0].satisfactions[0][field];
+      expect(validate({ commitResponse: doc })).toBe(false);
+    }
+  );
+
+  it("rejects malformed finalization time and incompatible source fields", () => {
+    const malformed = structuredClone(success);
+    malformed.admissionReport.coverage[0].satisfactions[0].finalizedAt = "yesterday";
+    expect(validate({ commitResponse: malformed })).toBe(false);
+
+    const incompatible = structuredClone(success);
+    Object.assign(incompatible.admissionReport.coverage[0].satisfactions[0], { unitRef: "delivery" });
+    expect(validate({ commitResponse: incompatible })).toBe(false);
+  });
+});
+
+describe("required participant sets on PASSED coverage (UCP #799 completeness)", () => {
+  const passedEntry = (overrides: Record<string, unknown> = {}) => ({
+    commitResponse: {
+      kind: "COMMIT_RESULT",
+      admissionReport: {
+        quoteId: "q-participants",
+        proposalId: "p-participants",
+        evaluatedAt: "2026-09-17T20:00:00Z",
+        failures: [],
+        coverage: [{
+          relationId: "retail:gate",
+          status: "PASSED",
+          satisfactions: [{
+            source: "CURRENT_REQUEST",
+            unitRef: "u-delivery",
+            transition: { operation: "REDEEM" },
+          }],
+          requiredParticipants: [{
+            unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+            transition: { operation: "REDEEM" },
+          }],
+          ...overrides,
+        }],
+      },
+      commitResult: {
+        quoteId: "q-participants",
+        unitResults: [{ unitRef: "u-delivery", outcome: "APPLIED", committedEffects: [] }],
+      },
+    },
+  });
+
+  it("accepts a PASSED entry carrying its required participant set", () => {
+    expect(validate(passedEntry())).toBe(true);
+  });
+
+  it("accepts a two-participant required set", () => {
+    expect(validate(passedEntry({
+      requiredParticipants: [
+        { unitLocator: { scopeRef: "retail:order", unitKey: "goods_1" }, transition: { operation: "CANCEL" } },
+        { unitLocator: { scopeRef: "retail:order", unitKey: "goods_2" }, transition: { operation: "CANCEL" } },
+      ],
+    }))).toBe(true);
+  });
+
+  it("rejects an empty required participant set", () => {
+    expect(validate(passedEntry({ requiredParticipants: [] }))).toBe(false);
+  });
+
+  it("rejects a duplicated required participant", () => {
+    const participant = {
+      unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+      transition: { operation: "REDEEM" },
+    };
+    expect(validate(passedEntry({
+      requiredParticipants: [participant, structuredClone(participant)],
+    }))).toBe(false);
+  });
+
+  it("rejects a required participant with no unitLocator or no transition", () => {
+    expect(validate(passedEntry({
+      requiredParticipants: [{ transition: { operation: "REDEEM" } }],
+    }))).toBe(false);
+    expect(validate(passedEntry({
+      requiredParticipants: [{ unitLocator: { scopeRef: "retail:order", unitKey: "delivery" } }],
+    }))).toBe(false);
+  });
+
+  it("rejects an unknown field on a required participant", () => {
+    expect(validate(passedEntry({
+      requiredParticipants: [{
+        unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+        transition: { operation: "REDEEM" },
+        finalizedAt: "2026-09-17T19:00:00Z",
+      }],
+    }))).toBe(false);
+  });
+
+  it("rejects requiredParticipants on a FAILED or DEFERRED entry", () => {
+    const failed = passedEntry();
+    failed.commitResponse.admissionReport.coverage[0] = {
+      relationId: "retail:gate",
+      status: "FAILED",
+      requiredParticipants: [{
+        unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+        transition: { operation: "REDEEM" },
+      }],
+    } as never;
+    expect(validate(failed)).toBe(false);
+
+    const deferred = passedEntry();
+    deferred.commitResponse.admissionReport.coverage[0] = {
+      relationId: "retail:gate",
+      status: "DEFERRED",
+      dependsOn: ["retail:other"],
+      requiredParticipants: [{
+        unitLocator: { scopeRef: "retail:order", unitKey: "delivery" },
+        transition: { operation: "REDEEM" },
+      }],
+    } as never;
+    expect(validate(deferred)).toBe(false);
   });
 });
